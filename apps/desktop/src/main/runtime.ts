@@ -1,9 +1,10 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { appendFile, mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { BrowserWindow, dialog, ipcMain, screen, shell } from "electron";
+import { BrowserWindow, app, dialog, ipcMain, nativeImage, screen, shell } from "electron";
 import {
   DESKTOP_UPDATE_CHANNELS,
   DESKTOP_UPDATE_MODES,
@@ -540,6 +541,7 @@ const MAC_WINDOW_CHROME_CSS = `
 `;
 
 function createPendingHtml(): string {
+  const logoDataUrl = getDesktopIconDataUrl();
   return `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html>
 <html>
   <head>
@@ -556,21 +558,49 @@ function createPendingHtml(): string {
         margin: 0;
       }
       main {
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        border-radius: 24px;
-        padding: 32px;
+        align-items: center;
+        display: flex;
+        flex-direction: column;
+        text-align: center;
       }
+      img {
+        border-radius: 34%;
+        display: block;
+        height: 72px;
+        object-fit: cover;
+        width: 72px;
+      }
+      h1 { margin: 18px 0 0; }
       p { color: #aeb7d5; margin: 12px 0 0; }
     </style>
   </head>
   <body>
     <main>
+      ${logoDataUrl ? `<img src="${logoDataUrl}" alt="" />` : ""}
       <h1>Open Design</h1>
       <p>Waiting for the web runtime URL…</p>
     </main>
   </body>
 </html>`)}`;
+}
+
+function resolveDesktopIconPath(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../../../web/public/app-icon.png");
+}
+
+function applyDockIcon(): void {
+  if (process.platform !== "darwin" || !app.dock) return;
+  const icon = nativeImage.createFromPath(resolveDesktopIconPath());
+  if (icon.isEmpty()) return;
+  app.dock.setIcon(icon);
+}
+
+function getDesktopIconDataUrl(): string | null {
+  try {
+    return `data:image/png;base64,${readFileSync(resolveDesktopIconPath()).toString("base64")}`;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeScreenshotPath(filePath: string): string {
@@ -849,6 +879,7 @@ function checkOptionsFromHost(options: unknown): { autoDownload?: boolean } | un
 
 export async function createDesktopRuntime(options: DesktopRuntimeOptions): Promise<DesktopRuntime> {
   const preloadPath = options.preloadPath ?? join(dirname(fileURLToPath(import.meta.url)), "preload.cjs");
+  applyDockIcon();
 
   // ipcMain.handle() registers a handler in an internal map that is *not*
   // surfaced via eventNames(); the previous `!eventNames().includes(...)`
@@ -984,6 +1015,7 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
   const petWindow = createDesktopPetWindow(preloadPath);
   const window = new BrowserWindow({
     height: 900,
+    icon: resolveDesktopIconPath(),
     // Below this size the project page's left/right split (chat
     // composer + designs panel + preview pane) overlaps and the top
     // navigation clips, so prevent Electron from honoring user drags

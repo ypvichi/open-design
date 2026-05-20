@@ -30,6 +30,9 @@
   --accent-soft: #f5d8cb;
   --accent-tint: #fbeee5;
   --accent-hover: #b45a3b;
+  --chat-warm-fill: #faf9f7;
+  --chat-warm-fill-strong: #f4ece6;
+  --chat-warm-border: #e4d8cf;
 
   /* Semantic accent tints used by tool / status pills. */
   --green: #1f7a3a;
@@ -96,6 +99,9 @@
   --accent-soft: #3d2318;
   --accent-tint: #2e1a12;
   --accent-hover: #e8896a;
+  --chat-warm-fill: #2a211d;
+  --chat-warm-fill-strong: #3a261d;
+  --chat-warm-border: #5a3729;
 
   --green: #4caf72;
   --green-bg: #0f2a18;
@@ -143,6 +149,9 @@
     --accent-soft: #3d2318;
     --accent-tint: #2e1a12;
     --accent-hover: #e8896a;
+    --chat-warm-fill: #2a211d;
+    --chat-warm-fill-strong: #3a261d;
+    --chat-warm-border: #5a3729;
 
     --green: #4caf72;
     --green-bg: #0f2a18;
@@ -586,7 +595,7 @@ code {
   flex: 1 1 124px;
   padding: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px;
+  grid-template-columns: minmax(0, 1fr) 24px;
   align-items: center;
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -668,10 +677,10 @@ code {
   letter-spacing: 0;
 }
 .workspace-tab__close {
-  width: 16px;
-  height: 16px;
-  margin-right: 3px;
-  padding: 0;
+  width: 20px;
+  height: 20px;
+  margin-right: 2px;
+  padding: 4px;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -679,6 +688,7 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  justify-self: center;
   opacity: 0;
   flex: 0 0 auto;
 }
@@ -13413,9 +13423,9 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
 
 /* Tool / operation cards — single, ungrouped */
 .op-card {
-  border: 1px solid var(--border);
+  border: 1px solid var(--chat-warm-border);
   border-radius: var(--radius);
-  background: var(--bg-panel);
+  background: var(--chat-warm-fill);
   overflow: hidden;
   box-shadow: var(--shadow-xs);
   min-width: 0;
@@ -13433,11 +13443,11 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
   width: 22px;
   height: 22px;
   border-radius: 6px;
-  background: var(--bg-subtle);
+  background: var(--chat-warm-fill-strong);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);
+  color: var(--accent);
   font-size: 12px;
   font-family: var(--mono);
   flex-shrink: 0;
@@ -13489,9 +13499,9 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
   align-items: flex-start;
   gap: 2px;
   padding: 7px 11px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--chat-warm-border);
   border-radius: 8px;
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--chat-warm-fill) 78%, var(--bg-panel));
   color: var(--text);
   font-size: 12.5px;
   font-family: inherit;
@@ -13499,10 +13509,14 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
   text-align: left;
   transition: border-color 120ms ease, background 120ms ease;
 }
-.op-ask-question-option:hover { border-color: var(--accent); }
+.op-ask-question-option:hover {
+  border-color: var(--accent);
+  background: var(--chat-warm-fill-strong);
+}
 .op-ask-question-option.on {
   border-color: var(--accent);
-  background: var(--accent-bg, var(--bg-subtle));
+  background: var(--chat-warm-fill-strong);
+  color: var(--accent-hover);
 }
 .op-ask-question-option:disabled {
   cursor: default;
@@ -13551,13 +13565,13 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
  * would wipe the selected state and the card would look unanswered.
  */
 .op-ask-question-locked .op-ask-question-option:not(.on) {
-  border-color: var(--border-soft);
-  background: transparent;
+  border-color: color-mix(in srgb, var(--chat-warm-border) 72%, transparent);
+  background: color-mix(in srgb, var(--chat-warm-fill) 62%, transparent);
   color: var(--text-muted);
 }
 .op-ask-question-locked .op-ask-question-option.on {
   border-color: var(--accent);
-  background: var(--accent-bg, var(--bg-subtle));
+  background: var(--chat-warm-fill-strong);
   cursor: default;
 }
 .op-ask-question-locked .op-ask-question-option.on .op-ask-question-option-desc {
@@ -13631,8 +13645,8 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
 .produced-files {
   margin-top: 4px;
   padding: 12px 14px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
+  background: var(--chat-warm-fill);
+  border: 1px solid var(--chat-warm-border);
   border-radius: var(--radius);
 }
 .produced-files-label {
@@ -13650,8 +13664,8 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
   gap: 8px;
   padding: 6px 8px;
   border-radius: 6px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--chat-warm-fill) 78%, var(--bg-panel));
+  border: 1px solid var(--chat-warm-border);
   font-size: 12px;
 }
 .produced-file-icon { width: 22px; text-align: center; color: var(--text-muted); }
@@ -15112,27 +15126,26 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
 /* Question form — interactive form a planning agent can post into chat */
 .question-form {
   margin: 8px 0;
-  border: 1px solid var(--border);
+  border: 1px solid var(--chat-warm-border);
   border-radius: var(--radius-lg);
-  background: var(--bg-panel);
+  background: var(--chat-warm-fill);
   box-shadow: var(--shadow-md);
   overflow: hidden;
 }
 .question-form-locked {
-  background: var(--bg-subtle);
+  background: var(--chat-warm-fill);
   box-shadow: none;
-  opacity: 0.92;
 }
 .question-form-head {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, var(--accent-tint) 0%, var(--bg-panel) 100%);
+  border-bottom: 1px solid var(--chat-warm-border);
+  background: linear-gradient(180deg, var(--chat-warm-fill-strong) 0%, var(--chat-warm-fill) 100%);
 }
 .question-form-locked .question-form-head {
-  background: var(--bg-subtle);
+  background: var(--chat-warm-fill-strong);
 }
 .question-form-icon {
   width: 28px;
@@ -15169,8 +15182,8 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
   text-transform: uppercase;
   padding: 3px 8px;
   border-radius: 999px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
+  background: var(--chat-warm-fill);
+  border: 1px solid var(--chat-warm-border);
   color: var(--text-muted);
 }
 .question-form-body {
@@ -15207,9 +15220,9 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--chat-warm-border);
   border-radius: 999px;
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--chat-warm-fill) 78%, var(--bg-panel));
   font-size: 12px;
   cursor: pointer;
   transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
@@ -15230,15 +15243,18 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
   color: inherit;
   opacity: 0.72;
 }
-.qf-chip:hover { border-color: var(--border-strong); }
+.qf-chip:hover {
+  border-color: var(--accent);
+  background: var(--chat-warm-fill-strong);
+}
 .qf-chip-disabled {
   cursor: not-allowed;
   opacity: 0.48;
 }
-.qf-chip-disabled:hover { border-color: var(--border); }
+.qf-chip-disabled:hover { border-color: var(--chat-warm-border); }
 .qf-chip-on {
   border-color: var(--accent);
-  background: var(--accent-soft);
+  background: var(--chat-warm-fill-strong);
   color: var(--accent-hover);
   font-weight: 500;
 }
@@ -15247,14 +15263,22 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
 .qf-select,
 .qf-textarea {
   font-size: 13px;
+  background: color-mix(in srgb, var(--chat-warm-fill) 50%, var(--bg-panel));
+  border-color: var(--chat-warm-border);
+}
+.qf-input:focus,
+.qf-select:focus,
+.qf-textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .question-form-foot {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-subtle);
+  border-top: 1px solid var(--chat-warm-border);
+  background: var(--chat-warm-fill-strong);
 }
 .qf-hint,
 .qf-locked-note {
@@ -16417,8 +16441,8 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
+  background: var(--chat-warm-fill);
+  border: 1px solid var(--chat-warm-border);
   border-radius: var(--radius-pill);
   font-size: 11.5px;
   color: var(--text-muted);
@@ -16428,7 +16452,7 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--text-muted);
+  background: var(--chat-warm-border);
 }
 .assistant-footer .dot[data-active="true"] {
   background: var(--accent);
@@ -16444,11 +16468,11 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   color: var(--text-muted);
 }
 .assistant-footer[data-unfinished="true"] {
-  background: var(--amber-bg);
-  border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
+  background: var(--chat-warm-fill-strong);
+  border-color: color-mix(in srgb, var(--accent) 25%, var(--chat-warm-border));
 }
 .assistant-footer[data-unfinished="true"] .dot {
-  background: var(--amber);
+  background: var(--accent);
 }
 
 /* ---------------------------------------------------------------------
@@ -16761,7 +16785,7 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   gap: 2px;
   margin-left: 2px;
   padding-left: 8px;
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--chat-warm-border);
   color: var(--text-muted);
 }
 .assistant-feedback-button {
@@ -16780,14 +16804,14 @@ body.entry-resizing { cursor: col-resize; user-select: none; }
   overflow: visible;
 }
 .assistant-feedback-button:hover {
-  background: var(--bg-subtle);
-  border-color: var(--border);
+  background: var(--chat-warm-fill-strong);
+  border-color: var(--chat-warm-border);
   color: var(--text-strong);
 }
 .assistant-feedback-button[data-selected="true"] {
   color: var(--accent);
-  background: var(--accent-tint);
-  border-color: var(--accent-soft);
+  background: var(--chat-warm-fill-strong);
+  border-color: var(--chat-warm-border);
 }
 .assistant-feedback-button[data-selected="true"] svg {
   fill: currentColor;
@@ -25954,6 +25978,7 @@ body.desktop-pet-shell .pet-task-item {
 .workspace-shell .workspace-tab {
   height: 30px;
   min-height: 30px;
+  grid-template-columns: minmax(0, 1fr) 26px;
   border-radius: 9px;
   border: 1px solid transparent;
   background: transparent;
@@ -25965,7 +25990,7 @@ body.desktop-pet-shell .pet-task-item {
 }
 .workspace-shell .workspace-tab__main {
   gap: 7px;
-  padding-inline: 10px 4px;
+  padding-inline: 10px 2px;
 }
 .workspace-shell .workspace-tab__label {
   font-size: 12.5px;
@@ -26203,8 +26228,8 @@ body.desktop-pet-shell .pet-task-item {
 .app .status-pill {
   gap: 6px;
   padding: 4px 10px;
-  border-color: var(--border);
-  background: var(--bg-subtle);
+  border-color: var(--chat-warm-border);
+  background: var(--chat-warm-fill);
   font-size: 11.5px;
 }
 .app .op-waiting {

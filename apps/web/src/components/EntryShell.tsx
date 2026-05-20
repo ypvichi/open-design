@@ -842,6 +842,16 @@ export function EntryShell({
           <div className="entry-main__topbar">
             <div className="entry-main__topbar-chips">
               <GithubStarBadge />
+              <a
+                className="entry-discord-badge"
+                href="https://discord.gg/mHAjSMV6gz"
+                aria-label="Join the Open Design Discord"
+                title="Join the Open Design Discord"
+                data-testid="entry-discord-badge"
+              >
+                <Icon name="discord" size={16} className="entry-discord-badge__icon" />
+                <span className="entry-discord-badge__label">Join Discord</span>
+              </a>
               <InlineModelSwitcher
                 config={config}
                 agents={agents}
@@ -869,7 +879,7 @@ export function EntryShell({
                 data-testid="entry-use-everywhere-button"
               >
                 <span className="use-everywhere-chip__icon" aria-hidden>
-                  <Icon name="hammer" size={13} />
+                  <Icon name="hammer" size={16} />
                 </span>
                 <span className="use-everywhere-chip__label">
                   {t('entry.useEverywhereTitle')}

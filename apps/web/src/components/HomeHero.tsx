@@ -96,6 +96,31 @@ interface HomeMentionSection {
   options: HomeMentionOption[];
 }
 
+function HeroBrandIcon() {
+  return (
+    <svg
+      viewBox="0 0 444 444"
+      fill="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M212.059 291.897L166.327 171.549C164.847 167.654 168.651 163.836 172.52 165.333L292.925 211.915C297.88 213.832 296.514 221.229 291.205 221.229H221.322V290.177C221.322 295.523 213.957 296.891 212.059 291.897Z"
+        fill="currentColor"
+      />
+      <path
+        d="M72 222C72 304.843 139.157 372 222 372H82C76.4772 372 72 367.523 72 362V222Z"
+        fill="currentColor"
+      />
+      <path
+        d="M222 87C296.558 87 357 147.442 357 222C357 296.558 296.558 357 222 357C147.442 357 87 296.558 87 222C87 147.442 147.442 87 222 87Z"
+        stroke="currentColor"
+        strokeWidth="30"
+      />
+    </svg>
+  );
+}
+
 export const HomeHero = forwardRef<HTMLTextAreaElement, Props>(function HomeHero(
   {
     prompt,
@@ -413,7 +438,7 @@ export const HomeHero = forwardRef<HTMLTextAreaElement, Props>(function HomeHero
     <section className="home-hero" data-testid="home-hero">
       <div className="home-hero__brand" aria-hidden>
         <span className="home-hero__brand-mark">
-          <img src="/app-icon.svg" alt="" draggable={false} />
+          <HeroBrandIcon />
         </span>
         <span className="home-hero__brand-name">Open Design</span>
       </div>
@@ -814,7 +839,7 @@ export const HomeHero = forwardRef<HTMLTextAreaElement, Props>(function HomeHero
               title={t('chat.attachAria')}
               aria-label={t('chat.attachAria')}
             >
-              <Icon name="attach" size={14} />
+              <Icon name="attach" size={20} />
             </button>
             <span className="home-hero__hint">
               <kbd>↵</kbd> {t('homeHero.toRun')} · <kbd>Shift</kbd>+<kbd>↵</kbd> {t('homeHero.forNewLine')}
@@ -829,7 +854,17 @@ export const HomeHero = forwardRef<HTMLTextAreaElement, Props>(function HomeHero
             title={canSubmit ? t('homeHero.run') : t('homeHero.typeSomethingToRun')}
             aria-label={t('homeHero.run')}
           >
-            <Icon name="arrow-up" size={18} />
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              width="20"
+              height="20"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M13.0001 7.82843V20H11.0001V7.82843L5.63614 13.1924L4.22192 11.7782L12.0001 4L19.7783 11.7782L18.3641 13.1924L13.0001 7.82843Z" />
+            </svg>
           </button>
         </div>
       </div>
