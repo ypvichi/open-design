@@ -23,7 +23,7 @@ import {
 } from './facets';
 import { sortByVisualAppeal } from './visualScore';
 
-export type FilterMode = 'all' | 'saved';
+export type FilterMode = 'all' | 'saved' | 'iux';
 
 interface UsePluginFacetsArgs {
   plugins: InstalledPluginRecord[];
@@ -66,7 +66,7 @@ export function usePluginFacets({
   preferDefaultFacet = true,
   presetSelection = null,
 }: UsePluginFacetsArgs): UsePluginFacetsResult {
-  const [mode, setMode] = useState<FilterMode>('all');
+  const [mode, setMode] = useState<FilterMode>('iux');
   const [selection, setSelection] = useState<FacetSelection>(EMPTY_SELECTION);
   const [query, setQuery] = useState('');
   // Apply the preferred default selection once, on the first render that
@@ -133,15 +133,131 @@ export function usePluginFacets({
   // the ranking. We do not re-sort here because filter + featured
   // override should both remain stable across selections.
   const filtered = useMemo(() => {
-    const base =
+    let base:any =
       mode === 'saved'
         ? savedList
-        : applyFacetSelection(visiblePlugins, selection);
+        :
+        mode === 'iux'
+          ? savedList
+          : applyFacetSelection(visiblePlugins, selection);
+    if (mode === 'iux') {
+      base = [
+        {
+          "id": "example-magazine-poster",
+          "title": "Magazine Poster",
+          "version": "0.1.0",
+          "sourceKind": "bundled",
+          "source": "E:\\workspace\\proj\\github\\ypvichi\\open-design\\plugins\\_official\\examples\\magazine-poster",
+          "sourceMarketplaceId": "iux",
+          "sourceMarketplaceEntryName": "open-design/example-magazine-poster",
+          "sourceMarketplaceEntryVersion": "0.1.0",
+          "marketplaceTrust": "iux",
+          "resolvedSource": "E:\\workspace\\proj\\github\\ypvichi\\open-design\\plugins\\_official\\examples\\magazine-poster",
+          "trust": "bundled",
+          "capabilitiesGranted": [
+            "prompt:inject"
+          ],
+          "manifest": {
+            "specVersion": "1.0.0",
+            "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+            "name": "example-magazine-poster",
+            "title": "Magazine Poster",
+            "version": "0.1.0",
+            "description": "An editorial-style poster — newsprint paper, dateline, oversized serif\nheadline with a struck-through word and italic accent, a 2-column body\nblock, and 6 numbered sections with annotated pull-quote captions.\nReads like a Sunday-paper full-page essay or a thoughtful launch poster.\nUse when the brief asks for \"magazine poster\", \"editorial poster\",\n\"newsprint\", \"essay layout\", or \"manifesto\".",
+            "author": {
+              "name": '',//"Open Design",
+              "url": ''//"https://github.com/nexu-io"
+            },
+            "license": "MIT",
+            "homepage": '',//"https://github.com/nexu-io/open-design/tree/main/plugins/_official/examples/magazine-poster",
+            "tags": [
+              // "example",
+              // "first-party",
+              "prototype",
+              // "marketing",
+              "web",
+              "desktop",
+              // "magazine-poster",
+              // "editorial-poster",
+              // "newsprint",
+              // "newspaper-layout",
+              // "essay",
+              // "manifesto",
+              // "long-form-poster",
+              // "untitled"
+            ],
+            "compat": {
+              "agentSkills": [
+                {
+                  "path": "./SKILL.md"
+                }
+              ]
+            },
+            "od": {
+              "kind": "scenario",
+              "taskKind": "new-generation",
+              "mode": "prototype",
+              "platform": "desktop",
+              "scenario": "marketing",
+              "preview": {
+                "type": "html",
+                "entry": "./example.html"
+              },
+              "useCase": {
+                "query": {
+                  "en": "Use this plugin to: Design an HTML prototype page.",//"Design an editorial magazine-style poster — ‘You don't need a designer to ship your first draft anymore.’ Newsprint paper, six numbered sections.",
+                  "zh-CN": "请用这个插件完成以下任务：设计一个HTML原型页面"//"使用这个插件完成以下任务：Design an editorial magazine-style poster — ‘You don't need a designer to ship your first draft anymore.’ Newsprint paper, six numbered sections."
+                },
+                "exampleOutputs": [
+                  {
+                    "path": "./example.html",
+                    "title": "IUX页面模板"
+                  }
+                ]
+              },
+              "context": {
+                "skills": [
+                  {
+                    "path": "./SKILL.md"
+                  }
+                ],
+                "designSystem": {
+                  "primary": true
+                },
+                "assets": [
+                  "./example.html"
+                ]
+              },
+              "pipeline": {
+                "stages": [
+                  {
+                    "id": "generate",
+                    "atoms": [
+                      "file-write",
+                      "live-artifact"
+                    ]
+                  }
+                ]
+              },
+              "capabilities": [
+                "prompt:inject",
+                "fs:write"
+              ],
+              "surface": "web",
+              "featured": 0.02
+            }
+          },
+          "fsPath": "E:\\workspace\\proj\\github\\ypvichi\\open-design\\plugins\\_official\\examples\\magazine-poster",
+          "installedAt": 1779414077731,
+          "updatedAt": 1783936344415
+        }
+      ];
+    }
     return filterByQuery(base, query);
   }, [mode, savedList, visiblePlugins, selection, query]);
 
   function pickCategory(slug: string | null): void {
-    if (mode === 'saved') setMode('all');
+    if (mode !== 'all') setMode('all');
     setSelection((prev) => ({
       category: prev.category === slug ? null : slug,
       subcategory: null,

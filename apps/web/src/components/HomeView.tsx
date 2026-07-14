@@ -269,8 +269,17 @@ export function HomeView({
     const load = () => {
       void listPlugins().then((rows) => {
         if (cancelled) return;
+        // console.log('我通过发请求获取插件数据',rows)
         setPlugins(rows);
-        setPluginsLoading(false);
+        // setPluginsLoading(false);
+        listPlugins({
+          url:"http://localhost:7001/webapi/v1/od/plugins"
+        }).then((rows)=>{
+          console.log('我通过AI Builder的后台获取的plugins',rows);
+          setPluginsLoading(false);
+        }).catch(e=>{
+          setPluginsLoading(false);
+        })
       });
     };
     load();

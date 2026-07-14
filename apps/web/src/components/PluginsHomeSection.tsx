@@ -145,8 +145,12 @@ export function PluginsHomeSection({
               onPick={pickCategory}
               savedCount={savedList.length}
               savedActive={mode === 'saved'}
+              savedActive2={mode === 'iux'}
               onToggleSaved={() =>
                 setMode(mode === 'saved' ? 'all' : 'saved')
+              }
+              onToggleSaved2={() =>
+                setMode(mode === 'iux' ? 'all' : 'iux')
               }
               query={query}
               onQueryChange={setQuery}
@@ -212,7 +216,9 @@ interface CategoryRowProps {
   onPick: (slug: string | null) => void;
   savedCount: number;
   savedActive: boolean;
+  savedActive2: boolean;
   onToggleSaved: () => void;
+  onToggleSaved2: () => void;
   query: string;
   onQueryChange: (next: string) => void;
 }
@@ -229,7 +235,9 @@ function CategoryRow({
   onPick,
   savedCount,
   savedActive,
+  savedActive2,
   onToggleSaved,
+  onToggleSaved2,
   query,
   onQueryChange,
 }: CategoryRowProps) {
@@ -245,6 +253,26 @@ function CategoryRow({
         role="tablist"
         aria-label={t('pluginsHome.categoryFilterAria')}
       >
+        <button
+          type="button"
+          className={[
+            'plugins-home__chip',
+            'plugins-home__chip--saved',
+            savedActive2 ? 'is-active' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          onClick={onToggleSaved2}
+          aria-pressed={savedActive}
+          data-testid="plugins-home-chip-saved"
+        >
+          <Icon name="star" size={11} />
+          <span>
+            {/* {t('pluginsHome.featured')} */}
+            IUX广场
+          </span>
+          <span className="plugins-home__chip-count">{savedCount}</span>
+        </button>
         <button
           type="button"
           className={[

@@ -421,13 +421,14 @@ export async function saveTabs(
 
 export interface ListPluginsOptions {
   includeHidden?: boolean;
+  url?:string;
 }
 
 export async function listPlugins(
   options: ListPluginsOptions = {},
 ): Promise<InstalledPluginRecord[]> {
   try {
-    const resp = await fetch('/api/plugins');
+    const resp = await fetch(options.url||'/api/plugins');
     if (!resp.ok) return [];
     const json = (await resp.json()) as { plugins?: InstalledPluginRecord[] };
     const plugins = json.plugins ?? [];
