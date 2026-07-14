@@ -48,9 +48,11 @@ web-prototype/
 2. **Read `references/layouts.md`** so you know which section skeletons exist. Don't write a section type that isn't covered — pick the closest layout and adapt.
 3. **Read the active DESIGN.md** (already injected into your system prompt). Map its colors to the six `:root` variables in the seed; don't introduce new tokens.
 
-### Step 1 — Copy the seed
+### Step 1 — Prepare `index.html` from the seed
 
-Copy `assets/template.html` to the project root as `index.html`. Replace the six `:root` variables with the active design system's tokens. Replace the page `<title>` and the topnav brand.
+Use `assets/template.html` as the seed for the canonical project file, normally `index.html`.
+
+Replace the six `:root` variables with the active design system's tokens. Replace the page `<title>` and the topnav brand.
 
 ### Step 2 — Plan the section list
 
@@ -67,15 +69,15 @@ State the chosen list in one sentence to the user *before* writing — they can 
 
 ### Step 3 — Paste and fill
 
-For each chosen layout, copy the `<section>` block from `layouts.md` into `<main id="content">` of your `index.html`. Replace bracketed `[REPLACE]` strings with real, specific copy from the user's brief. **No filler** — if a slot is empty, the section is the wrong choice; pick a different layout.
+For each chosen layout, copy the `<section>` block from `layouts.md` into `<main id="content">` of the project HTML. Replace bracketed `[REPLACE]` strings with real, specific copy from the user's brief. **No filler** — if a slot is empty, the section is the wrong choice; pick a different layout.
 
 ### Step 4 — Self-check
 
 Run through `references/checklist.md` top to bottom. Every P0 item must pass before you move on. P1 items should pass; P2 are bonus.
 
-### Step 5 — Emit the artifact
+### Step 5 — Write the project file
 
-Wrap `index.html` in `<artifact>` tags. One sentence before describing what's there. Stop after `</artifact>`.
+Write the completed HTML to the canonical project file, normally `index.html`. Then send one short ordinary assistant summary naming the file and describing what's there. Do not output the full HTML source in chat.
 
 ## Hard rules (the seed protects most of these — don't fight it)
 
@@ -87,11 +89,12 @@ Wrap `index.html` in `<artifact>` tags. One sentence before describing what's th
 
 ## Output contract
 
+Filesystem runs use project files as the source of truth:
+
 ```
-<artifact identifier="kebab-case-slug" type="text/html" title="Human Title">
-<!doctype html>
-<html>...</html>
-</artifact>
+index.html
 ```
 
-One sentence before the artifact. Nothing after.
+Open Design derives the preview from the written project file. Do not also emit a source-code `<artifact>` block for the same generation turn.
+
+One short summary after writing the file. Nothing after.

@@ -12,17 +12,26 @@ import type { ApplyResult, InstalledPluginRecord } from '@open-design/contracts'
 import { applyPlugin } from '../state/projects';
 import { navigate } from '../router';
 import { useI18n } from '../i18n';
+import { localizePluginDescription, localizePluginTitle } from './plugins-home/localization';
+import { useAnalytics } from '../analytics/provider';
+import { trackPluginDetailClick } from '../analytics/events';
 
 interface Props {
   pluginId: string;
 }
 
 export function PluginDetailView(props: Props) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
+  const analytics = useAnalytics();
   const [plugin, setPlugin] = useState<InstalledPluginRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState<ApplyResult | null>(null);
+
+  const onBack = () => {
+    trackPluginDetailClick(analytics.track, { page_name: 'plugins', area: 'plugin_detail', element: 'back', plugin_id: props.pluginId });
+    navigate({ kind: 'marketplace' });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -47,7 +56,7 @@ export function PluginDetailView(props: Props) {
   if (error) {
     return (
       <div className="plugin-detail" data-testid="plugin-detail">
-        <button type="button" onClick={() => navigate({ kind: 'marketplace' })}>
+        <button type="button" onClick={onBack}>
           ← Marketplace
         </button>
         <div role="alert">Failed to load plugin: {error}</div>
@@ -63,6 +72,8 @@ export function PluginDetailView(props: Props) {
     );
   }
 
+  const localizedTitle = localizePluginTitle(locale, plugin);
+  const localizedDescription = localizePluginDescription(locale, plugin);
   const od = plugin.manifest?.od ?? {};
   const surfaces = od.genui?.surfaces ?? [];
   const required = od.connectors?.required ?? [];
@@ -80,6 +91,7 @@ export function PluginDetailView(props: Props) {
   }>;
 
   const onUse = async () => {
+    trackPluginDetailClick(analytics.track, { page_name: 'plugins', area: 'plugin_detail', element: 'use_plugin', plugin_id: plugin.id });
     setApplying(true);
     setError(null);
     const result = await applyPlugin(plugin.id, { locale });
@@ -100,13 +112,13 @@ export function PluginDetailView(props: Props) {
       <button
         type="button"
         className="plugin-detail__back"
-        onClick={() => navigate({ kind: 'marketplace' })}
+        onClick={onBack}
       >
         ← Marketplace
       </button>
 
       <header className="plugin-detail__header">
-        <h1>{plugin.title}</h1>
+        <h1>{localizedTitle}</h1>
         <div className="plugin-detail__meta">
           <span>v{plugin.version}</span>
           <span>trust: {plugin.trust}</span>
@@ -115,8 +127,8 @@ export function PluginDetailView(props: Props) {
         </div>
       </header>
 
-      {plugin.manifest?.description ? (
-        <p className="plugin-detail__description">{plugin.manifest.description}</p>
+      {localizedDescription ? (
+        <p className="plugin-detail__description">{localizedDescription}</p>
       ) : null}
 
       <section className="plugin-detail__capabilities">
@@ -170,7 +182,7 @@ export function PluginDetailView(props: Props) {
         <section className="plugin-detail__preview" data-testid="plugin-detail-preview-section">
           <h2>Preview</h2>
           <iframe
-            title={`${plugin.title} preview`}
+            title={`${localizedTitle} preview`}
             src={`/api/plugins/${encodeURIComponent(plugin.id)}/preview`}
             sandbox="allow-scripts"
             className="plugin-detail__preview-frame"
@@ -239,7 +251,7 @@ export function PluginDetailView(props: Props) {
           disabled={applying}
           data-testid="plugin-detail-use"
         >
-          {applying ? 'Applying…' : 'Use this plugin'}
+          {applying ? t('pluginCard.applying') : t('preview.usePlugin')}
         </button>
         {applied ? (
           <div className="plugin-detail__applied">

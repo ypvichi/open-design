@@ -1,5 +1,6 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from '@/playwright/suite';
 import type { Page } from '@playwright/test';
+import { openSettingsDialog } from '../lib/playwright/amr.js';
 
 const STORAGE_KEY = 'open-design:config';
 
@@ -37,12 +38,7 @@ async function openSettings(page: Page, theme: Theme) {
 
   await page.emulateMedia({ colorScheme: theme });
   await page.goto('/');
-  // The footer renders a `foot-pill-env` with title="Configure execution mode"
-  // alongside the top-right `settings-icon-btn` with title="Execution mode";
-  // disambiguate via exact role+name so this stays stable even if the footer
-  // pill comes and goes.
-  await page.getByRole('button', { name: 'Execution mode', exact: true }).click();
-  await expect(page.getByRole('dialog')).toBeVisible();
+  await openSettingsDialog(page);
 }
 
 /**
@@ -135,6 +131,12 @@ async function hoverAndMeasure(page: Page, selector: string) {
   return measureContrast(page, selector);
 }
 
+function settingsNavItem(page: Page, label: RegExp) {
+  return page
+    .locator('.settings-nav-item', { has: page.locator('strong', { hasText: label }) })
+    .first();
+}
+
 // Regression guard for #1795: hover backgrounds in Settings should not blow
 // out text contrast in either theme. The original bug (filed against 0.6.0)
 // used `rgba(255, 255, 255, 0.6)` for `.subtab-pill button:hover` which read
@@ -145,11 +147,9 @@ const THEMES: Theme[] = ['dark', 'light'];
 
 test.describe('Settings hover contrast (regression guard for #1795)', () => {
   for (const theme of THEMES) {
-    test(`Pets source tabs hover stays readable in ${theme} theme`, async ({ page }) => {
+    test(`[P2] Pets source tabs hover stays readable in ${theme} theme`, async ({ page }) => {
       await openSettings(page, theme);
-      const petsNav = page
-        .locator('.settings-nav-item', { has: page.locator('strong', { hasText: /^Pets$/i }) })
-        .first();
+      const petsNav = settingsNavItem(page, /^(Pets|Pet|宠物|寵物)$/i);
       await petsNav.click();
       // Pet tabs render once the section is mounted; no daemon round-trip is
       // required for the tab pills themselves.
@@ -164,7 +164,7 @@ test.describe('Settings hover contrast (regression guard for #1795)', () => {
       ).toBeGreaterThanOrEqual(WCAG_AA_NORMAL);
     });
 
-    test(`seg-btn surfaces (BYOK / Appearance / Notifications) hover stays readable in ${theme} theme`, async ({
+    test(`[P2] seg-btn surfaces (BYOK / Appearance / Notifications) hover stays readable in ${theme} theme`, async ({
       page,
     }) => {
       await openSettings(page, theme);
@@ -181,9 +181,7 @@ test.describe('Settings hover contrast (regression guard for #1795)', () => {
         `BYOK seg-btn hover ${execMeasurement.ratio} (${theme})`,
       ).toBeGreaterThanOrEqual(WCAG_AA_NORMAL);
 
-      const appearanceNav = page
-        .locator('.settings-nav-item', { has: page.locator('strong', { hasText: /^Appearance$/i }) })
-        .first();
+      const appearanceNav = settingsNavItem(page, /^(Appearance|外观|外觀)$/i);
       await appearanceNav.click();
       await page.waitForSelector('.seg-control .seg-btn');
       const themeMeasurement = await hoverAndMeasure(
@@ -195,9 +193,7 @@ test.describe('Settings hover contrast (regression guard for #1795)', () => {
         `Appearance theme hover ${themeMeasurement.ratio} (${theme})`,
       ).toBeGreaterThanOrEqual(WCAG_AA_NORMAL);
 
-      const notifNav = page
-        .locator('.settings-nav-item', { has: page.locator('strong', { hasText: /^Notifications$/i }) })
-        .first();
+      const notifNav = settingsNavItem(page, /^(Notifications|通知)$/i);
       await notifNav.click();
       await page.waitForSelector('.seg-control .seg-btn');
       const notifMeasurement = await hoverAndMeasure(

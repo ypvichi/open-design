@@ -44,7 +44,7 @@ export function resolveMacPaths(config: ToolPackConfig): MacPaths {
     identity.publicAppBundleName,
   );
   const installApplicationsRoot = join(namespaceRoot, "install", "Applications");
-  const installedAppPath = join(installApplicationsRoot, macAppBundleName(config.namespace));
+  const installedAppPath = join(installApplicationsRoot, identity.systemAppBundleName);
 
   return {
     appBuilderConfigPath: join(namespaceRoot, "builder-config.json"),
@@ -69,6 +69,7 @@ export function resolveMacPaths(config: ToolPackConfig): MacPaths {
     packagedMainPrebundlePath: join(namespaceRoot, "assembled", MAC_PREBUNDLED_PACKAGED_MAIN_RELATIVE_PATH),
     packagedConfigPath: join(namespaceRoot, "open-design-config.json"),
     resourceRoot: join(namespaceRoot, "resources", "open-design"),
+    payloadZipPath: join(namespaceRoot, "payload", `${PRODUCT_NAME}-${namespaceToken}-payload.zip`),
     systemApplicationsAppPath: join("/Applications", identity.systemAppBundleName),
     tarballsRoot: join(namespaceRoot, "tarballs"),
     userApplicationsAppPath: join(homedir(), "Applications", identity.systemAppBundleName),

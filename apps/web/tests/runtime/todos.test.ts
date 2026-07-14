@@ -74,6 +74,67 @@ describe('todo event helpers', () => {
     ]);
   });
 
+  it('normalizes Codex update_plan input as the current task queue', () => {
+    const events: AgentEvent[] = [
+      {
+        kind: 'tool_use',
+        id: 'plan-1',
+        name: 'update_plan',
+        input: {
+          plan: [
+            { step: 'Inspect chat rendering', status: 'completed' },
+            { step: 'Add annotation card', status: 'in_progress' },
+            { step: 'Run focused tests', status: 'pending' },
+          ],
+        },
+      },
+    ];
+
+    expect(latestTodosFromEvents(events)).toEqual([
+      { content: 'Inspect chat rendering', status: 'completed', activeForm: undefined },
+      { content: 'Add annotation card', status: 'in_progress', activeForm: undefined },
+      { content: 'Run focused tests', status: 'pending', activeForm: undefined },
+    ]);
+    expect(unfinishedTodosFromEvents(events)).toEqual([
+      { content: 'Add annotation card', status: 'in_progress', activeForm: undefined },
+      { content: 'Run focused tests', status: 'pending', activeForm: undefined },
+    ]);
+  });
+
+  it('recognizes snake_case todo_write events', () => {
+    const input = latestTodoWriteInputForPinnedCard([
+      {
+        runStatus: 'running',
+        events: [
+          {
+            kind: 'tool_use',
+            id: 'todo-1',
+            name: 'todo_write',
+            input: { todos: [{ content: 'Port task queue card', status: 'pending' }] },
+          },
+        ],
+      },
+    ]);
+
+    expect(parseTodoWriteInput(input)).toEqual([
+      { content: 'Port task queue card', status: 'pending', activeForm: undefined },
+    ]);
+  });
+
+  it('accepts native task item text aliases used by different agents', () => {
+    expect(parseTodoWriteInput({
+      todos: [
+        { description: 'Inspect plan mode output', status: 'completed' },
+        { label: 'Render todo card', status: 'in_progress' },
+        { text: 'Run focused tests', status: 'pending' },
+      ],
+    })).toEqual([
+      { content: 'Inspect plan mode output', status: 'completed', activeForm: undefined },
+      { content: 'Render todo card', status: 'in_progress', activeForm: undefined },
+      { content: 'Run focused tests', status: 'pending', activeForm: undefined },
+    ]);
+  });
+
   it('uses lowercase todowrite as the latest todo truth over older TodoWrite events', () => {
     const events: AgentEvent[] = [
       { kind: 'tool_use', id: 'todo-1', name: 'TodoWrite', input: firstTodoInput },
@@ -117,6 +178,45 @@ describe('todo event helpers', () => {
         activeForm: undefined,
       },
     ]);
+  });
+
+  // #1247 / #1060 — locks the canonical predicate: `stopped` counts as unfinished
+  // (status !== 'completed'), so the footer and the daemon's endedWithUnfinishedWork
+  // flag agree. Narrowing to "pending/in_progress only" would reintroduce the drift.
+  it('counts a stopped task as unfinished, matching the daemon predicate', () => {
+    const events: AgentEvent[] = [
+      {
+        kind: 'tool_use',
+        id: 'todo-1',
+        name: 'TodoWrite',
+        input: {
+          todos: [
+            { content: 'Draft layout', status: 'completed' },
+            { content: 'Build components', status: 'stopped' },
+          ],
+        },
+      },
+    ];
+    expect(unfinishedTodosFromEvents(events)).toEqual([
+      { content: 'Build components', status: 'stopped', activeForm: undefined },
+    ]);
+  });
+
+  it('treats an all-completed TodoWrite as finished (no unfinished work)', () => {
+    const events: AgentEvent[] = [
+      {
+        kind: 'tool_use',
+        id: 'todo-1',
+        name: 'TodoWrite',
+        input: {
+          todos: [
+            { content: 'Draft layout', status: 'completed' },
+            { content: 'Build components', status: 'completed' },
+          ],
+        },
+      },
+    ];
+    expect(unfinishedTodosFromEvents(events)).toEqual([]);
   });
 
   it('marks the active todo as stopped when a failed run ended without a final TodoWrite', () => {
@@ -174,6 +274,35 @@ describe('todo event helpers', () => {
     expect(parseTodoWriteInput(input)).toEqual([
       { content: 'Generate HTML', status: 'stopped', activeForm: undefined },
       { content: 'Self-check', status: 'pending', activeForm: undefined },
+    ]);
+  });
+
+  it('marks update_plan items as stopped when a terminal run ends with stale progress', () => {
+    const input = latestTodoWriteInputForPinnedCard([
+      {
+        runStatus: 'succeeded',
+        endedAt: 3_000,
+        events: [
+          {
+            kind: 'tool_use',
+            id: 'plan-1',
+            name: 'update_plan',
+            input: {
+              plan: [
+                { step: 'Inspect chat rendering', status: 'completed' },
+                { step: 'Add annotation card', status: 'in_progress' },
+                { step: 'Run focused tests', status: 'pending' },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(parseTodoWriteInput(input)).toEqual([
+      { content: 'Inspect chat rendering', status: 'completed', activeForm: undefined },
+      { content: 'Add annotation card', status: 'stopped', activeForm: undefined },
+      { content: 'Run focused tests', status: 'pending', activeForm: undefined },
     ]);
   });
 });

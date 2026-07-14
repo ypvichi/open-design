@@ -1,13 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Dialog, DialogFooter, DialogTitle } from '@open-design/components';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { Dispatch, FormEvent, SetStateAction } from 'react';
 import { useT } from '../i18n';
-import type { AppConfig, DesignSystemSummary } from '../types';
+import type { AppConfig, DesignSystemGenerationJob, DesignSystemSummary } from '../types';
 import {
   fetchDesignSystems,
   importGitHubDesignSystem,
   importLocalDesignSystem,
+  importShadcnDesignSystem,
+  updateDesignSystemDraft,
 } from '../providers/registry';
 import { DesignSystemPreviewModal } from './DesignSystemPreviewModal';
+import { Icon } from './Icon';
+import { orderDesignSystemGroups } from './design-system-group-order';
+import { AnimatePresence } from 'motion/react';
 
 // Sibling Settings section that hosts the design-systems registry.
 // Lifted out of the previous LibrarySection so each surface (functional
@@ -17,6 +23,14 @@ import { DesignSystemPreviewModal } from './DesignSystemPreviewModal';
 interface Props {
   cfg: AppConfig;
   setCfg: Dispatch<SetStateAction<AppConfig>>;
+  /**
+   * Notified after a successful design-system mutation.
+   * Lets App.tsx evict preview iframes whose project depends on the
+   * affected design system; body-only edits on existing systems also
+   * flow through here.
+   */
+  onDesignSystemsChanged?: (affectedDesignSystemId?: string) => void;
+  onDesignSystemImportRebuildJob?: (designSystemId: string, job: DesignSystemGenerationJob) => void;
 }
 
 function toggleCraftSlug(current: string[], slug: string, enabled: boolean): string[] {
@@ -26,15 +40,29 @@ function toggleCraftSlug(current: string[], slug: string, enabled: boolean): str
   return Array.from(next);
 }
 
-export function DesignSystemsSection({ cfg, setCfg }: Props) {
+export function DesignSystemsSection({
+  cfg,
+  setCfg,
+  onDesignSystemsChanged,
+  onDesignSystemImportRebuildJob,
+}: Props) {
   const t = useT();
+  const renameTitleId = useId();
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const [designSystems, setDesignSystems] = useState<DesignSystemSummary[]>([]);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [previewSystem, setPreviewSystem] = useState<DesignSystemSummary | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; original: string } | null>(null);
+  const [renameInput, setRenameInput] = useState('');
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  // Monotonic token for the active rename modal session. Bumped whenever the
+  // modal opens or closes so a slow PATCH that resolves after the user has
+  // moved on cannot clobber a newer session's modal state.
+  const renameSessionRef = useRef(0);
   const [importPath, setImportPath] = useState('');
-  const [importSource, setImportSource] = useState<'local' | 'github'>('local');
+  const [importSource, setImportSource] = useState<'local' | 'github' | 'shadcn'>('local');
   const [packageImportMode, setPackageImportMode] = useState<'normalized' | 'hybrid' | 'verbatim'>('hybrid');
   const [craftApplies, setCraftApplies] = useState<string[]>([]);
   const [addOpen, setAddOpen] = useState(false);
@@ -88,13 +116,23 @@ export function DesignSystemsSection({ cfg, setCfg }: Props) {
     return groups;
   }, [filtered]);
 
+  // Pin groups that hold editable (user-created) systems to the top so a
+  // user's own design systems are the first thing they see. Issue #2813.
+  const orderedGroups = useMemo(
+    () => orderDesignSystemGroups(Array.from(grouped.entries())),
+    [grouped],
+  );
+
   useEffect(() => {
     if (!highlightedDesignSystemId) return;
     const raf = window.requestAnimationFrame(() => {
-      cardRefs.current.get(highlightedDesignSystemId)?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center',
-      });
+      const card = cardRefs.current.get(highlightedDesignSystemId);
+      if (typeof card?.scrollIntoView === 'function') {
+        card.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+        });
+      }
     });
     const timeout = window.setTimeout(() => {
       setHighlightedDesignSystemId((current) =>
@@ -120,6 +158,61 @@ export function DesignSystemsSection({ cfg, setCfg }: Props) {
     });
   }
 
+  function startRename(ds: DesignSystemSummary) {
+    renameSessionRef.current += 1;
+    setRenameTarget({ id: ds.id, original: ds.title });
+    setRenameInput(ds.title);
+    setRenameError(null);
+  }
+
+  function cancelRename() {
+    renameSessionRef.current += 1;
+    setRenameTarget(null);
+    setRenameError(null);
+    setRenaming(false);
+  }
+
+  // Rename an editable design system via PATCH /api/design-systems/:id, then
+  // reflect the new title in the local list (re-sorted to keep card order
+  // stable). Built-in systems never reach here — the button is editable-only.
+  async function commitRename() {
+    if (!renameTarget || renaming) return;
+    const trimmed = renameInput.trim();
+    if (!trimmed || trimmed === renameTarget.original) {
+      cancelRename();
+      return;
+    }
+    const session = renameSessionRef.current;
+    const targetId = renameTarget.id;
+    setRenaming(true);
+    setRenameError(null);
+    const updated = await updateDesignSystemDraft(targetId, { title: trimmed });
+    if (updated) {
+      // The rename happened server-side, so reflect it in the list even if the
+      // user has since moved to another rename session.
+      setDesignSystems((current) =>
+        current
+          .map((d) => (d.id === targetId ? { ...d, title: updated.title } : d))
+          .sort((a, b) => a.title.localeCompare(b.title)),
+      );
+      onDesignSystemsChanged?.(targetId);
+    }
+    // Ignore a stale completion: the user cancelled or opened another rename
+    // while this PATCH was in flight, so the modal state now belongs to a
+    // different session and must not be touched.
+    if (renameSessionRef.current !== session) return;
+    setRenaming(false);
+    // updateDesignSystemDraft returns null on any non-OK response or fetch
+    // failure. Keep the modal open with the typed title intact so a transient
+    // daemon/network error can be retried instead of silently disappearing.
+    if (!updated) {
+      setRenameError(t('settings.designSystemRenameFailed'));
+      return;
+    }
+    setRenameTarget(null);
+    setRenameError(null);
+  }
+
   function clearImportFeedback() {
     setImportError(null);
     setImportMessage(null);
@@ -141,7 +234,9 @@ export function DesignSystemsSection({ cfg, setCfg }: Props) {
     const result =
       importSource === 'github'
         ? await importGitHubDesignSystem({ githubUrl: importTarget, ...importOptions })
-        : await importLocalDesignSystem({ baseDir: importTarget, ...importOptions });
+        : importSource === 'shadcn'
+          ? await importShadcnDesignSystem({ reference: importTarget, ...importOptions })
+          : await importLocalDesignSystem({ baseDir: importTarget, ...importOptions });
     setImporting(false);
     if ('error' in result) {
       setImportError(result.error.message);
@@ -155,6 +250,10 @@ export function DesignSystemsSection({ cfg, setCfg }: Props) {
     setImportPath('');
     setImportedDesignSystem(result.designSystem);
     setImportMessage(result.designSystem.title);
+    if (result.tokenContractRebuild?.job) {
+      onDesignSystemImportRebuildJob?.(result.designSystem.id, result.tokenContractRebuild.job);
+    }
+    onDesignSystemsChanged?.(result.designSystem.id);
   }
 
   function viewImportedDesignSystem() {
@@ -240,6 +339,16 @@ export function DesignSystemsSection({ cfg, setCfg }: Props) {
                   >
                     {t('settings.designSystemsSourceGithub')}
                   </button>
+                  <button
+                    type="button"
+                    className={importSource === 'shadcn' ? 'active' : ''}
+                    onClick={() => {
+                      setImportSource('shadcn');
+                      clearImportFeedback();
+                    }}
+                  >
+                    {t('settings.designSystemsSourceShadcn')}
+                  </button>
                 </div>
               </div>
               <div className="library-import-row">
@@ -305,13 +414,21 @@ export function DesignSystemsSection({ cfg, setCfg }: Props) {
                 <span className="library-import-option-label">
                   {importSource === 'github'
                     ? t('settings.designSystemsGithubUrl')
-                    : t('settings.designSystemsProjectPath')}
+                    : importSource === 'shadcn'
+                      ? t('settings.designSystemsShadcnReference')
+                      : t('settings.designSystemsProjectPath')}
                 </span>
                 <div className="library-install-row">
                   <input
                     type="text"
                     className="library-import-input"
-                    placeholder={importSource === 'github' ? 'https://github.com/owner/repo' : '/path/to/project'}
+                    placeholder={
+                      importSource === 'github'
+                        ? 'https://github.com/owner/repo'
+                        : importSource === 'shadcn'
+                          ? 'shadcn/ui/theme-zinc'
+                          : '/path/to/project'
+                    }
                     value={importPath}
                     onChange={(e) => {
                       setImportPath(e.target.value);
@@ -327,7 +444,9 @@ export function DesignSystemsSection({ cfg, setCfg }: Props) {
                       ? t('settings.libraryLoading')
                       : importSource === 'github'
                         ? t('settings.designSystemsImportGithub')
-                        : t('settings.designSystemsImportProject')}
+                        : importSource === 'shadcn'
+                          ? t('settings.designSystemsImportShadcn')
+                          : t('settings.designSystemsImportProject')}
                   </button>
                 </div>
               </div>
@@ -389,7 +508,7 @@ export function DesignSystemsSection({ cfg, setCfg }: Props) {
           <p className="library-empty">{t('settings.libraryNoResults')}</p>
         ) : (
           <>
-            {Array.from(grouped.entries()).map(([category, items]) => (
+            {orderedGroups.map(([category, items]) => (
               <div key={category} className="library-group">
                 {categoryFilter === 'All' ? (
                   <h4 className="library-group-title">
@@ -434,7 +553,24 @@ export function DesignSystemsSection({ cfg, setCfg }: Props) {
                             ))}
                           </div>
                         )}
-                        <div className="library-ds-title">{ds.title}</div>
+                        <div className="library-ds-title">
+                          <span className="library-ds-title-text">{ds.title}</span>
+                          {ds.source === 'user' || ds.isEditable === true ? (
+                            <button
+                              type="button"
+                              className="library-ds-edit"
+                              title={t('common.rename')}
+                              aria-label={`${t('common.rename')} ${ds.title}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                startRename(ds);
+                              }}
+                              onKeyDown={(e) => e.stopPropagation()}
+                            >
+                              <Icon name="pencil" size={13} />
+                            </button>
+                          ) : null}
+                        </div>
                         <div className="library-ds-summary">{ds.summary}</div>
                       </div>
                       <div className="library-ds-toggle-cell">
@@ -461,11 +597,54 @@ export function DesignSystemsSection({ cfg, setCfg }: Props) {
           </>
         )}
       </div>
-      {previewSystem ? (
-        <DesignSystemPreviewModal
-          system={previewSystem}
-          onClose={() => setPreviewSystem(null)}
-        />
+      <AnimatePresence>
+        {previewSystem ? (
+          <DesignSystemPreviewModal
+            system={previewSystem}
+            onClose={() => setPreviewSystem(null)}
+          />
+        ) : null}
+      </AnimatePresence>
+      {renameTarget ? (
+        <Dialog
+          as="form"
+          className="modal-rename"
+          onClose={cancelRename}
+          closeOnEscape
+          ariaLabelledBy={renameTitleId}
+          onSubmit={(e) => {
+            e.preventDefault();
+            void commitRename();
+          }}
+        >
+          <DialogTitle id={renameTitleId}>{t('common.rename')}</DialogTitle>
+          <label>
+            <input
+              type="text"
+              value={renameInput}
+              autoFocus
+              aria-label={t('common.rename')}
+              onChange={(e) => setRenameInput(e.target.value)}
+            />
+          </label>
+          {renameError ? <p className="library-install-error">{renameError}</p> : null}
+          <DialogFooter className="row">
+            <button type="button" onClick={cancelRename}>
+              {t('common.cancel')}
+            </button>
+            <button
+              type="submit"
+              className="primary"
+              disabled={
+                renaming ||
+                !renameInput.trim() ||
+                renameInput.trim() === renameTarget.original
+              }
+            >
+              {t('common.save')}
+            </button>
+          </DialogFooter>
+        </Dialog>
       ) : null}
     </section>
   );

@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   agentRefreshOptionsForConfig,
+  amrWalletValueLabel,
   canFetchProviderModels,
   canRunProviderConnectionTest,
+  deriveAboutUpdateControl,
   deriveComposioCredentialState,
   configForManualOrbitRun,
   isOrbitRunDisabled,
+  isProviderModelDiscoveryUnsupported,
   isValidApiBaseUrl,
   mergeProviderModelOptions,
+  providerModelsCacheKey,
   sanitizeSettingsSavePayload,
   shouldEnableSettingsSave,
   shouldShowCustomModelInput,
@@ -17,7 +21,9 @@ import {
   updateAgentCliEnvValue,
   updateCurrentApiProtocolConfig,
 } from '../../src/components/SettingsDialog';
-import type { AppConfig, ConnectionTestResponse } from '../../src/types';
+import { deriveUpdaterModel } from '../../src/lib/updater';
+import type { OpenDesignHostUpdaterStatusSnapshot } from '@open-design/host';
+import type { AppConfig, AppVersionInfo, ConnectionTestResponse } from '../../src/types';
 
 const originalFetch = globalThis.fetch;
 
@@ -33,13 +39,273 @@ const baseConfig: AppConfig = {
   designSystemId: null,
 };
 
+const packagedVersion: AppVersionInfo = {
+  arch: 'arm64',
+  channel: 'beta',
+  packaged: true,
+  platform: 'darwin',
+  version: '1.2.3-beta.3',
+};
+
+function updateStatus(
+  overrides: Partial<OpenDesignHostUpdaterStatusSnapshot> = {},
+): OpenDesignHostUpdaterStatusSnapshot {
+  return {
+    arch: 'arm64',
+    capabilities: {
+      canApplyInPlace: false,
+      canDownload: true,
+      canOpenInstaller: true,
+      requiresManualInstall: true,
+    },
+    channel: 'beta',
+    currentVersion: '1.2.3-beta.3',
+    enabled: true,
+    mode: 'package-launcher',
+    platform: 'darwin',
+    state: 'idle',
+    supported: true,
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
+describe('SettingsDialog about update control', () => {
+  it('shows a check action before updates have been checked', () => {
+    const control = deriveAboutUpdateControl(
+      deriveUpdaterModel(updateStatus(), { hostAvailable: true }),
+      packagedVersion,
+    );
+
+    expect(control).toMatchObject({
+      primaryAction: 'check',
+      primaryLabelKey: 'settings.updateCheck',
+      statusKey: 'settings.updateStatusNotChecked',
+    });
+  });
+
+  it('shows up-to-date status without turning the primary action into a release link', () => {
+    const control = deriveAboutUpdateControl(
+      deriveUpdaterModel(updateStatus({ state: 'not-available' }), { hostAvailable: true }),
+      packagedVersion,
+    );
+
+    expect(control).toMatchObject({
+      primaryAction: 'check',
+      primaryLabelKey: 'settings.updateRecheck',
+      showReleaseLink: true,
+      statusKey: 'settings.updateStatusUpToDate',
+      statusTone: 'success',
+    });
+  });
+
+  it('offers download when an update is available', () => {
+    const control = deriveAboutUpdateControl(
+      deriveUpdaterModel(
+        updateStatus({
+          availableVersion: '1.2.3-beta.4',
+          state: 'available',
+        }),
+        { hostAvailable: true },
+      ),
+      packagedVersion,
+    );
+
+    expect(control).toMatchObject({
+      primaryAction: 'download',
+      primaryLabelKey: 'updater.download',
+      statusKey: 'settings.updateStatusAvailable',
+      statusVars: { version: '1.2.3-beta.4' },
+    });
+  });
+
+  it('disables the primary action while downloading and keeps progress visible', () => {
+    const control = deriveAboutUpdateControl(
+      deriveUpdaterModel(
+        updateStatus({
+          incoming: {
+            arch: 'arm64',
+            artifact: {
+              name: 'Open Design Beta.dmg',
+              platformKey: 'macAppleSilicon',
+              type: 'dmg',
+              url: 'https://fixture.test/Open Design Beta.dmg',
+            },
+            channel: 'beta',
+            progress: {
+              receivedBytes: 25,
+              totalBytes: 100,
+            },
+            startedAt: '2026-06-16T00:00:00.000Z',
+            version: '1.2.3-beta.4',
+          },
+          state: 'downloading',
+        }),
+        { hostAvailable: true },
+      ),
+      packagedVersion,
+    );
+
+    expect(control).toMatchObject({
+      primaryAction: null,
+      primaryLabelKey: 'updater.downloading',
+      statusKey: 'settings.updateStatusDownloadingPercent',
+      statusVars: { percent: 25 },
+    });
+  });
+
+  it('offers install when an update has already downloaded', () => {
+    const control = deriveAboutUpdateControl(
+      deriveUpdaterModel(
+        updateStatus({
+          artifact: {
+            name: 'Open Design Beta.dmg',
+            platformKey: 'macAppleSilicon',
+            type: 'dmg',
+            url: 'https://fixture.test/Open Design Beta.dmg',
+          },
+          availableVersion: '1.2.3-beta.4',
+          downloadPath: '/tmp/Open Design Beta.dmg',
+          state: 'downloaded',
+        }),
+        { hostAvailable: true },
+      ),
+      packagedVersion,
+    );
+
+    expect(control).toMatchObject({
+      primaryAction: 'install',
+      primaryLabelKey: 'settings.updateNow',
+      statusKey: 'settings.updateStatusReady',
+      statusVars: { version: '1.2.3-beta.4' },
+    });
+  });
+
+  it('offers install and restart when a payload update has already downloaded', () => {
+    const control = deriveAboutUpdateControl(
+      deriveUpdaterModel(
+        updateStatus({
+          artifact: {
+            name: 'open-design-1.2.3-beta.4-mac-arm64-payload.zip',
+            platformKey: 'mac',
+            type: 'payload',
+            url: 'https://fixture.test/open-design-1.2.3-beta.4-mac-arm64-payload.zip',
+          },
+          availableVersion: '1.2.3-beta.4',
+          capabilities: {
+            canApplyInPlace: true,
+            canDownload: true,
+            canOpenInstaller: false,
+            requiresManualInstall: false,
+          },
+          downloadPath: '/tmp/open-design-updater/open-design-1.2.3-beta.4-mac-arm64-payload.zip',
+          state: 'downloaded',
+        }),
+        { hostAvailable: true },
+      ),
+      packagedVersion,
+    );
+
+    expect(control).toMatchObject({
+      primaryAction: 'install',
+      primaryLabelKey: 'updater.installRestart',
+      statusKey: 'settings.updateStatusReady',
+      statusVars: { version: '1.2.3-beta.4' },
+    });
+  });
+
+  it('offers a quit retry after the installer has opened', () => {
+    const control = deriveAboutUpdateControl(
+      deriveUpdaterModel(
+        updateStatus({
+          artifact: {
+            name: 'Open Design Beta.dmg',
+            platformKey: 'macAppleSilicon',
+            type: 'dmg',
+            url: 'https://fixture.test/Open Design Beta.dmg',
+          },
+          availableVersion: '1.2.3-beta.4',
+          downloadPath: '/tmp/Open Design Beta.dmg',
+          installResult: {
+            dryRun: true,
+            openedAt: '2026-05-19T00:00:00.000Z',
+            path: '/tmp/Open Design Beta.dmg',
+          },
+          state: 'downloaded',
+        }),
+        { hostAvailable: true },
+      ),
+      packagedVersion,
+    );
+
+    expect(control).toMatchObject({
+      primaryAction: 'quit',
+      primaryLabelKey: 'updater.quitButton',
+      showReleaseLink: false,
+      statusKey: 'settings.updateQuitFailed',
+      statusTone: 'warning',
+    });
+  });
+
+  it('turns update errors into a retry action', () => {
+    const control = deriveAboutUpdateControl(
+      deriveUpdaterModel(updateStatus({ state: 'error' }), { hostAvailable: true }),
+      packagedVersion,
+    );
+
+    expect(control).toMatchObject({
+      primaryAction: 'check',
+      primaryLabelKey: 'settings.updateRetry',
+      statusKey: 'settings.updateStatusFailed',
+      statusTone: 'error',
+    });
+  });
+
+  it('does not offer in-app update actions in development or web-only contexts', () => {
+    const developmentControl = deriveAboutUpdateControl(
+      deriveUpdaterModel(updateStatus(), { hostAvailable: true }),
+      { ...packagedVersion, packaged: false },
+    );
+    const webControl = deriveAboutUpdateControl(
+      deriveUpdaterModel(null, { hostAvailable: false }),
+      packagedVersion,
+    );
+
+    expect(developmentControl).toMatchObject({
+      primaryAction: null,
+      statusKey: 'settings.updateStatusDevelopment',
+    });
+    expect(webControl).toMatchObject({
+      primaryAction: null,
+      statusKey: 'settings.updateStatusUnsupported',
+    });
+  });
+});
+
 describe('SettingsDialog API protocol switching', () => {
+  it('builds provider model cache keys without exposing raw API keys', () => {
+    const key = providerModelsCacheKey(
+      'anthropic',
+      'https://api.anthropic.com/',
+      'sk-secret-value',
+    );
+
+    expect(key).toContain('https://api.anthropic.com');
+    expect(key).not.toContain('sk-secret-value');
+    expect(key).toBe(
+      providerModelsCacheKey(
+        'anthropic',
+        'https://api.anthropic.com',
+        'sk-secret-value',
+      ),
+    );
+  });
+
   it('stores the current custom protocol config while preserving custom endpoint details', () => {
     const config: AppConfig = {
       ...baseConfig,
@@ -112,13 +378,34 @@ describe('SettingsDialog API protocol switching', () => {
     });
   });
 
+  it('keeps Atlas Cloud as an OpenAI-compatible known provider without changing the OpenAI default', () => {
+    const openai = switchApiProtocolConfig(baseConfig, 'openai');
+    const atlas = updateCurrentApiProtocolConfig(openai, {
+      baseUrl: 'https://api.atlascloud.ai/v1',
+      model: 'qwen/qwen3.5-flash',
+      apiProviderBaseUrl: 'https://api.atlascloud.ai/v1',
+    });
+
+    expect(openai).toMatchObject({
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4o',
+      apiProviderBaseUrl: 'https://api.openai.com/v1',
+    });
+    expect(atlas).toMatchObject({
+      apiProtocol: 'openai',
+      baseUrl: 'https://api.atlascloud.ai/v1',
+      model: 'qwen/qwen3.5-flash',
+      apiProviderBaseUrl: 'https://api.atlascloud.ai/v1',
+    });
+  });
+
   it('auto-fills Google defaults when switching from a selected known provider', () => {
     expect(switchApiProtocolConfig(baseConfig, 'google')).toMatchObject({
       mode: 'api',
       apiProtocol: 'google',
       apiKey: '',
       baseUrl: 'https://generativelanguage.googleapis.com',
-      model: 'gemini-2.0-flash',
+      model: 'gemini-3.5-flash',
       apiProviderBaseUrl: 'https://generativelanguage.googleapis.com',
     });
   });
@@ -216,12 +503,15 @@ describe('SettingsDialog provider model fetch helpers', () => {
         'openai',
       ),
     ).toBe(false);
+    // #3225 — an internal-IP endpoint is now fetchable from the UI's
+    // perspective; the daemon enforces the OD_ALLOWED_INTERNAL_HOSTS allowlist
+    // and returns the authoritative allow/block decision.
     expect(
       canFetchProviderModels(
         { apiKey: 'sk-openai', baseUrl: 'http://10.0.0.5:11434/v1' },
         'openai',
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       canFetchProviderModels(
         { apiKey: 'azure-key', baseUrl: 'https://example.openai.azure.com' },
@@ -234,19 +524,50 @@ describe('SettingsDialog provider model fetch helpers', () => {
         'ollama',
       ),
     ).toBe(false);
+    expect(
+      canFetchProviderModels(
+        {
+          apiKey: 'sk-mimo',
+          baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+        },
+        'anthropic',
+      ),
+    ).toBe(false);
+    expect(
+      isProviderModelDiscoveryUnsupported(
+        'openai',
+        'https://token-plan-cn.xiaomimimo.com/v1',
+      ),
+    ).toBe(true);
+    expect(
+      isProviderModelDiscoveryUnsupported(
+        'anthropic',
+        'https://token-plan-cn.xiaomimimo.com/anthropic',
+      ),
+    ).toBe(true);
   });
 
   it('merges fetched provider models before static suggestions without duplicates', () => {
     expect(
       mergeProviderModelOptions(
         [
-          { id: 'remote-a', label: 'Remote A' },
+          {
+            id: 'remote-a',
+            label: 'Remote A',
+            metadata: { cost: 'low', capability: 'standard' },
+            enabled: false,
+          },
           { id: 'gpt-4o', label: 'Remote GPT' },
         ],
         ['gpt-4o', 'o4-mini'],
       ),
     ).toEqual([
-      { id: 'remote-a', label: 'Remote A' },
+      {
+        id: 'remote-a',
+        label: 'Remote A',
+        metadata: { cost: 'low', capability: 'standard' },
+        enabled: false,
+      },
       { id: 'gpt-4o', label: 'Remote GPT' },
       { id: 'o4-mini', label: 'o4-mini' },
     ]);
@@ -274,6 +595,102 @@ describe('SettingsDialog custom model picker state', () => {
   });
 });
 
+describe('SettingsDialog AMR wallet display state', () => {
+  it('keeps the last balance visible while a refresh is pending', () => {
+    expect(
+      amrWalletValueLabel({
+        balance: '$0.10',
+        loadingLabel: 'Loading',
+        ready: false,
+        snapshot: {
+          status: 'available',
+          profile: 'local',
+          user: { id: 'user-1', email: 'amr@example.com' },
+          balanceUsd: '0.1000',
+          updatedAt: '2026-06-23T06:05:18.782Z',
+          fetchedAt: '2026-06-23T06:05:19.000Z',
+          stale: false,
+          source: 'daemon_cache',
+        },
+        unavailableLabel: 'Balance temporarily unavailable',
+      }),
+    ).toBe('$0.10');
+  });
+
+  it('shows re-auth guidance when the daemon reports missing or rejected wallet credentials', () => {
+    expect(
+      amrWalletValueLabel({
+        balance: null,
+        loadingLabel: 'Loading',
+        ready: true,
+        snapshot: {
+          status: 'unavailable',
+          profile: 'local',
+          user: { id: 'user-1', email: 'amr@example.com' },
+          balanceUsd: null,
+          updatedAt: null,
+          fetchedAt: '2026-06-23T06:05:19.000Z',
+          stale: false,
+          source: 'unavailable',
+          error: {
+            code: 'unauthorized',
+            message: 'AMR wallet authorization expired. Sign in again to refresh wallet access.',
+          },
+        },
+        unavailableLabel: 'Balance temporarily unavailable',
+      }),
+    ).toBe('AMR wallet authorization expired. Sign in again to refresh wallet access.');
+
+    expect(
+      amrWalletValueLabel({
+        balance: null,
+        loadingLabel: 'Loading',
+        ready: true,
+        snapshot: {
+          status: 'unavailable',
+          profile: 'local',
+          user: { id: 'user-1', email: 'amr@example.com' },
+          balanceUsd: null,
+          updatedAt: null,
+          fetchedAt: '2026-06-23T06:05:19.000Z',
+          stale: false,
+          source: 'unavailable',
+          error: {
+            code: 'missing_control_key',
+            message: 'Sign in again to refresh AMR wallet credentials.',
+          },
+        },
+        unavailableLabel: 'Balance temporarily unavailable',
+      }),
+    ).toBe('Sign in again to refresh AMR wallet credentials.');
+  });
+
+  it('keeps transient wallet failures on the temporary-unavailable copy', () => {
+    expect(
+      amrWalletValueLabel({
+        balance: null,
+        loadingLabel: 'Loading',
+        ready: true,
+        snapshot: {
+          status: 'unavailable',
+          profile: 'local',
+          user: { id: 'user-1', email: 'amr@example.com' },
+          balanceUsd: null,
+          updatedAt: null,
+          fetchedAt: '2026-06-23T06:05:19.000Z',
+          stale: false,
+          source: 'unavailable',
+          error: {
+            code: 'network',
+            message: 'AMR wallet balance is temporarily unavailable.',
+          },
+        },
+        unavailableLabel: 'Balance temporarily unavailable',
+      }),
+    ).toBe('Balance temporarily unavailable');
+  });
+});
+
 describe('SettingsDialog API Base URL validation', () => {
   it('accepts public http/https URLs and loopback local providers', () => {
     expect(isValidApiBaseUrl('https://api.openai.com/v1')).toBe(true);
@@ -288,17 +705,35 @@ describe('SettingsDialog API Base URL validation', () => {
     expect(isValidApiBaseUrl('ftp://api.example.com')).toBe(false);
     expect(isValidApiBaseUrl('http:api.example.com')).toBe(false);
     expect(isValidApiBaseUrl('https://')).toBe(false);
-    expect(isValidApiBaseUrl('http://0.0.0.0:11434/v1')).toBe(false);
-    expect(isValidApiBaseUrl('http://10.0.0.5:11434/v1')).toBe(false);
-    expect(isValidApiBaseUrl('http://100.64.0.1:11434/v1')).toBe(false);
-    expect(isValidApiBaseUrl('http://169.254.1.5:11434/v1')).toBe(false);
-    expect(isValidApiBaseUrl('http://172.16.0.5:11434/v1')).toBe(false);
-    expect(isValidApiBaseUrl('http://192.168.1.5:11434/v1')).toBe(false);
-    expect(isValidApiBaseUrl('http://224.0.0.1:11434/v1')).toBe(false);
-    expect(isValidApiBaseUrl('http://[::]:11434/v1')).toBe(false);
-    expect(isValidApiBaseUrl('http://[fd00::1]:11434/v1')).toBe(false);
-    expect(isValidApiBaseUrl('http://[fe80::1]:11434/v1')).toBe(false);
-    expect(isValidApiBaseUrl('http://[::ffff:192.168.1.5]:11434/v1')).toBe(false);
+  });
+
+  it('keeps syntactically-valid internal-IP base URLs UI-valid so the daemon allowlist can decide (#3225)', () => {
+    // The internal-IP / SSRF decision belongs to the daemon, which honors the
+    // operator's OD_ALLOWED_INTERNAL_HOSTS allowlist — a value the browser
+    // cannot see. These are well-formed URLs that merely point at internal
+    // addresses, so the client must not block them: the operator needs to run
+    // the connection test / model fetch and get the daemon's authoritative
+    // answer (allowed when listed, "Internal IPs blocked" otherwise).
+    for (const internal of [
+      'http://0.0.0.0:11434/v1',
+      'http://10.0.0.5:11434/v1',
+      'http://100.64.0.1:11434/v1',
+      'http://169.254.1.5:11434/v1',
+      'http://172.16.0.5:11434/v1',
+      'http://192.168.1.5:11434/v1',
+      'http://224.0.0.1:11434/v1',
+      'http://[::]:11434/v1',
+      'http://[fd00::1]:11434/v1',
+      'http://[fe80::1]:11434/v1',
+      'http://[::ffff:192.168.1.5]:11434/v1',
+    ]) {
+      expect(isValidApiBaseUrl(internal)).toBe(true);
+    }
+  });
+
+  it('still rejects genuinely malformed URLs client-side', () => {
+    expect(isValidApiBaseUrl('http://')).toBe(false);
+    expect(isValidApiBaseUrl('http:// /v1')).toBe(false);
   });
 });
 
@@ -344,6 +779,86 @@ describe('SettingsDialog agent CLI env settings', () => {
     expect(next.agentCliEnv).toEqual({
       codex: { CODEX_HOME: '~/.codex-alt', CODEX_BIN: '~/bin/codex-next' },
     });
+    expect(next.agentCliEnvIntent).toEqual({});
+  });
+
+  it('marks API key env values as explicit CLI overrides', () => {
+    const config: AppConfig = {
+      ...baseConfig,
+      mode: 'daemon',
+      agentCliEnv: {
+        codex: { CODEX_HOME: '~/.codex-alt' },
+      },
+    };
+
+    const next = updateAgentCliEnvValue(
+      config,
+      'codex',
+      'CODEX_API_KEY',
+      '  sk-codex  ',
+    );
+
+    expect(next.agentCliEnv).toEqual({
+      codex: { CODEX_HOME: '~/.codex-alt', CODEX_API_KEY: 'sk-codex' },
+    });
+    expect(next.agentCliEnvIntent).toEqual({
+      codex: { apiKeyOverride: true },
+    });
+  });
+
+  it('keeps the API key override marker when clearing a base URL with a key present', () => {
+    const config: AppConfig = {
+      ...baseConfig,
+      mode: 'daemon',
+      agentCliEnv: {
+        codex: {
+          CODEX_API_KEY: 'sk-codex',
+          OPENAI_BASE_URL: 'https://proxy.example/openai',
+        },
+      },
+    };
+
+    const next = updateAgentCliEnvValue(
+      config,
+      'codex',
+      'OPENAI_BASE_URL',
+      '',
+    );
+
+    expect(next.agentCliEnv).toEqual({
+      codex: { CODEX_API_KEY: 'sk-codex' },
+    });
+    expect(next.agentCliEnvIntent).toEqual({
+      codex: { apiKeyOverride: true },
+    });
+  });
+
+  it('removes the API key override marker when the last auth key is cleared', () => {
+    const config: AppConfig = {
+      ...baseConfig,
+      mode: 'daemon',
+      agentCliEnv: {
+        claude: {
+          CLAUDE_CONFIG_DIR: '~/.claude-2',
+          ANTHROPIC_API_KEY: 'sk-anthropic',
+        },
+      },
+      agentCliEnvIntent: {
+        claude: { apiKeyOverride: true },
+      },
+    };
+
+    const next = updateAgentCliEnvValue(
+      config,
+      'claude',
+      'ANTHROPIC_API_KEY',
+      '',
+    );
+
+    expect(next.agentCliEnv).toEqual({
+      claude: { CLAUDE_CONFIG_DIR: '~/.claude-2' },
+    });
+    expect(next.agentCliEnvIntent).toEqual({});
   });
 
   it('removes empty per-agent CLI env entries', () => {
@@ -500,6 +1015,7 @@ describe('SettingsDialog Orbit run behavior', () => {
       url: '/api/orbit/run',
       method: 'POST',
     });
+    expect(JSON.parse(calls[1]!.body ?? '{}')).toEqual({ locale: null });
   });
 
   it('does not sync an unsaved Composio draft before starting a manual Orbit run', async () => {
@@ -543,6 +1059,7 @@ describe('SettingsDialog Orbit run behavior', () => {
       '/api/orbit/run',
     ]);
     expect(JSON.parse(calls[0]!.body ?? '{}')).toMatchObject({ force: false });
+    expect(JSON.parse(calls[2]!.body ?? '{}')).toEqual({ locale: null });
   });
 
   it('does not force an explicit empty media provider map before starting a manual Orbit run', async () => {
@@ -582,6 +1099,7 @@ describe('SettingsDialog Orbit run behavior', () => {
       providers: {},
       force: false,
     });
+    expect(JSON.parse(calls[2]!.body ?? '{}')).toEqual({ locale: null });
   });
 
   it('preserves masked daemon media keys before starting a manual Orbit run', async () => {
@@ -695,6 +1213,30 @@ describe('SettingsDialog Orbit run behavior', () => {
     ]);
   });
 
+  it('passes the selected UI locale through to the manual Orbit run', async () => {
+    const calls: Array<{ url: string; method: string; body?: string }> = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+      const body = typeof init?.body === 'string' ? init.body : undefined;
+      calls.push({ url, method, body });
+
+      if (url === '/api/app-config') {
+        return new Response(null, { status: 204 });
+      }
+      if (url === '/api/orbit/run') {
+        return new Response(JSON.stringify({ projectId: 'orbit-project', agentRunId: 'run-zh' }), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    await expect(
+      persistConfigAndRunOrbit(baseConfig, { locale: 'zh-CN' }),
+    ).resolves.toEqual({ projectId: 'orbit-project', agentRunId: 'run-zh' });
+
+    expect(JSON.parse(calls[1]!.body ?? '{}')).toEqual({ locale: 'zh-CN' });
+  });
+
   it('persists the displayed default template before starting a legacy null-template run', async () => {
     const calls: Array<{ url: string; method: string; body?: string }> = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -777,7 +1319,6 @@ describe('shouldEnableSettingsSave', () => {
     expect(shouldEnableSettingsSave(incompleteApiCfg, 'integrations', [availableAgent], true)).toBe(true);
     expect(shouldEnableSettingsSave(incompleteApiCfg, 'notifications', [availableAgent], true)).toBe(true);
     expect(shouldEnableSettingsSave(incompleteApiCfg, 'pet', [availableAgent], true)).toBe(true);
-    expect(shouldEnableSettingsSave(incompleteApiCfg, 'skills', [availableAgent], true)).toBe(true);
     expect(shouldEnableSettingsSave(incompleteApiCfg, 'designSystems', [availableAgent], true)).toBe(true);
     expect(shouldEnableSettingsSave(incompleteApiCfg, 'about', [availableAgent], true)).toBe(true);
   });
@@ -924,7 +1465,6 @@ describe('sanitizeSettingsSavePayload', () => {
       'appearance',
       'notifications',
       'pet',
-      'skills',
       'designSystems',
       'about',
     ];

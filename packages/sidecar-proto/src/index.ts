@@ -1,3 +1,5 @@
+import { RELEASE_CHANNELS, type ReleaseChannel } from "@open-design/release";
+
 export const APP_KEYS = Object.freeze({
   DAEMON: "daemon",
   DESKTOP: "desktop",
@@ -67,14 +69,29 @@ export const SIDECAR_DEFAULTS = Object.freeze({
   windowsPipePrefix: "open-design",
 } as const);
 
+export const OPEN_DESIGN_PRODUCT_NAME = "Open Design";
+
+export function resolveWindowsReleaseNamespaceToken(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
+export function resolveWindowsUninstallRegistryKey(namespace: string): string {
+  const namespaceToken = resolveWindowsReleaseNamespaceToken(namespace);
+  return `Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${OPEN_DESIGN_PRODUCT_NAME}-${namespaceToken}`;
+}
+
 export const SIDECAR_MESSAGES = Object.freeze({
   CLICK: "click",
   CONSOLE: "console",
   EVAL: "eval",
+  EXPORT_ARTIFACT: "export-artifact",
   EXPORT_PDF: "export-pdf",
+  MINT_IMPORT_TOKEN: "mint-import-token",
   REGISTER_DESKTOP_AUTH: "register-desktop-auth",
+  RENDER_SLIDES: "render-slides",
   SCREENSHOT: "screenshot",
   SHUTDOWN: "shutdown",
+  SHOW: "show",
   STATUS: "status",
   UPDATE: "update",
 } as const);
@@ -96,11 +113,14 @@ export const DESKTOP_UPDATE_MODES = Object.freeze({
 export type DesktopUpdateMode = (typeof DESKTOP_UPDATE_MODES)[keyof typeof DESKTOP_UPDATE_MODES];
 
 export const DESKTOP_UPDATE_CHANNELS = Object.freeze({
-  BETA: "beta",
-  STABLE: "stable",
+  BETA: RELEASE_CHANNELS.BETA,
+  BETAS: RELEASE_CHANNELS.BETAS,
+  PRERELEASE: RELEASE_CHANNELS.PRERELEASE,
+  PREVIEW: RELEASE_CHANNELS.PREVIEW,
+  STABLE: RELEASE_CHANNELS.STABLE,
 } as const);
 
-export type DesktopUpdateChannel = (typeof DESKTOP_UPDATE_CHANNELS)[keyof typeof DESKTOP_UPDATE_CHANNELS];
+export type DesktopUpdateChannel = ReleaseChannel;
 
 export const DESKTOP_UPDATE_STATES = Object.freeze({
   AVAILABLE: "available",
@@ -138,6 +158,7 @@ export type ServiceRuntimeState = "idle" | "running" | "starting" | "stopped" | 
 export type DaemonStatusSnapshot = {
   pid?: number | null;
   state: ServiceRuntimeState;
+  trustedWebOriginPort?: number | null;
   updatedAt?: string;
   url: string | null;
   /**
@@ -168,6 +189,7 @@ export type DesktopStatusSnapshot = {
   state: DesktopRuntimeState;
   title?: string | null;
   update?: DesktopUpdateStatusSnapshot;
+  updateStatusError?: string;
   updatedAt?: string;
   url?: string | null;
   windowVisible?: boolean;
@@ -225,6 +247,107 @@ export type DesktopExportPdfResult = {
   path?: string;
 };
 
+// Renders an HTML deck (every `<section class="slide">`) to one pixel-perfect
+// PNG per slide using the desktop's Electron Chromium, so screenshot-based
+// PPTX/PDF export reuses the already-bundled browser instead of shipping a
+// second headless engine. `slides` are `data:image/png;base64,...` URLs in
+// slide order; `width`/`height` are the captured pixel dimensions.
+export type DesktopRenderSlidesInput = {
+  baseHref?: string;
+  html: string;
+  // Explicit page-vs-deck signal from the caller (the web side knows whether the
+  // artifact is a deck). `true` forces deck slide capture, `false` forces a
+  // single full-page capture even if the page happens to contain `.slide`
+  // elements (carousels, testimonials). When omitted, the renderer falls back to
+  // the `.slide`-count heuristic.
+  deck?: boolean;
+  // When true, produce an editable .pptx (native PowerPoint shapes/text via the
+  // vendored dom-to-pptx engine) instead of screenshot images. Writes one .pptx
+  // into `outputDir` and returns `pptxFile`.
+  editable?: boolean;
+  // When set, render only the slide at this index (deck mode) — used by image
+  // export to capture the single slide the user is viewing.
+  index?: number;
+  // Encoding for the full-document `page` mode: `jpeg` (small, for PDF) or `png`
+  // (lossless source, for image export). Deck slides are always PNG. Default png.
+  pageImageFormat?: "png" | "jpeg";
+  // Deck only: render every slide and stitch them top-to-bottom into a single
+  // tall image (used by image export of a deck). Ignored for ordinary pages.
+  stitch?: boolean;
+  // Page mode only: split an ordinary (non-deck) page into one image PER
+  // VIEWPORT, top to bottom, instead of a single full-page capture — used by
+  // the PDF path so a long scrolling page becomes a multi-page PDF (one screen
+  // per page). Ignored in deck mode (decks already paginate per slide).
+  paginate?: boolean;
+  // Optional requested render viewport/stage size in CSS px. Omitted dimensions
+  // fall back to renderer defaults.
+  width?: number;
+  height?: number;
+  // When set, the renderer writes each rendered image to a file inside this
+  // directory and returns the file paths in `slideFiles` instead of base64
+  // data URLs in `slides`. The daemon (which owns the data root) creates and
+  // owns this directory and reads/deletes the files afterwards — this avoids
+  // pushing tens of MB of base64 through the JSON IPC channel for large images.
+  // desktop only writes to the absolute path it is given; it never derives it.
+  outputDir?: string;
+};
+
+// `mode` reports what the renderer found: `deck` = one PNG per 1920x1080 slide;
+// `page` = a single full-document PNG at natural size (the artifact has no
+// `.slide` sections, e.g. an ordinary website).
+// When the request set `outputDir`, the images are returned as absolute file
+// paths in `slideFiles` (binary on disk, no base64); otherwise as base64 data
+// URLs in `slides`.
+export type DesktopRenderSlidesErrorCode =
+  | "NO_SLIDES"
+  | "PAGE_TOO_TALL"
+  | "RENDER_FAILED"
+  | "SLIDE_INDEX_OUT_OF_RANGE";
+
+export type DesktopRenderSlidesResult = {
+  error?: string;
+  errorCode?: DesktopRenderSlidesErrorCode;
+  height?: number;
+  mode?: "deck" | "page";
+  ok: boolean;
+  // Absolute path to the written editable .pptx (set when the request was
+  // `editable` with an `outputDir`).
+  pptxFile?: string;
+  slideFiles?: string[];
+  slides?: string[];
+  width?: number;
+};
+
+export type DesktopExportArtifactFormat = "pdf" | "image";
+// Electron's `nativeImage` (the off-screen renderer the programmatic exporter
+// uses) can only encode PNG and JPEG. WebP is deliberately excluded so a caller
+// asking for it gets a clear validation error instead of a silent PNG downgrade.
+// (The in-app web Download menu encodes WebP client-side via canvas.toBlob and
+// is unaffected by this list.)
+export type DesktopExportArtifactImageFormat = "png" | "jpeg";
+
+// Generic programmatic export (PDF / image). The desktop renderer writes
+// the result to a temporary file and returns its path; the daemon streams those
+// bytes to the HTTP caller (the `od export` CLI), then removes the temp file.
+export type DesktopExportArtifactInput = {
+  baseHref?: string;
+  deck: boolean;
+  format: DesktopExportArtifactFormat;
+  html: string;
+  imageFormat?: DesktopExportArtifactImageFormat;
+  title: string;
+  width?: number;
+  height?: number;
+};
+
+export type DesktopExportArtifactResult = {
+  bytes?: number;
+  error?: string;
+  mime?: string;
+  ok: boolean;
+  path?: string;
+};
+
 export type DesktopUpdateCapabilitySet = {
   canApplyInPlace: boolean;
   canDownload: boolean;
@@ -263,7 +386,12 @@ export type DesktopUpdateErrorSnapshot = {
 };
 
 export type DesktopUpdateInstallResult = {
+  activeVersion?: string;
+  artifactPath?: string;
   dryRun?: boolean;
+  helperLogPath?: string;
+  launcherRuntimePath?: string;
+  launchPath?: string;
   openedAt: string;
   path: string;
 };
@@ -292,12 +420,41 @@ export type DesktopUpdateIncomingSnapshot = {
   version: string;
 };
 
+export type DesktopUpdateCacheLifecycleTrigger = "cold-start" | "next-version-ready";
+
+export type DesktopUpdateReleaseLifecycleState =
+  | "cleanup-deferred"
+  | "cleanup-removed"
+  | "deprecated"
+  | "retained"
+  | "unknown";
+
+export type DesktopUpdateCacheLifecycleSummary = {
+  lastRunAt?: string;
+  lastTrigger?: DesktopUpdateCacheLifecycleTrigger;
+  platform: string;
+  releases: {
+    cleanupDeferred: number;
+    cleanupRemoved: number;
+    deprecated: number;
+    errors: number;
+    retained: number;
+    total: number;
+    unknown: number;
+  };
+};
+
+export type DesktopUpdateCacheSnapshot = {
+  lifecycle?: DesktopUpdateCacheLifecycleSummary;
+};
+
 export type DesktopUpdateStatusSnapshot = {
   active?: DesktopUpdateReleaseSnapshot;
   arch: string;
   artifact?: DesktopUpdateArtifactSnapshot;
   artifactUrl?: string;
   availableVersion?: string;
+  cache?: DesktopUpdateCacheSnapshot;
   capabilities: DesktopUpdateCapabilitySet;
   channel: DesktopUpdateChannel;
   checksum?: DesktopUpdateChecksumSnapshot;
@@ -328,8 +485,11 @@ export type SidecarShutdownMessage = { type: typeof SIDECAR_MESSAGES.SHUTDOWN };
 export type DesktopEvalMessage = { input: DesktopEvalInput; type: typeof SIDECAR_MESSAGES.EVAL };
 export type DesktopScreenshotMessage = { input: DesktopScreenshotInput; type: typeof SIDECAR_MESSAGES.SCREENSHOT };
 export type DesktopConsoleMessage = { type: typeof SIDECAR_MESSAGES.CONSOLE };
+export type DesktopShowMessage = { type: typeof SIDECAR_MESSAGES.SHOW };
 export type DesktopClickMessage = { input: DesktopClickInput; type: typeof SIDECAR_MESSAGES.CLICK };
 export type DesktopExportPdfMessage = { input: DesktopExportPdfInput; type: typeof SIDECAR_MESSAGES.EXPORT_PDF };
+export type DesktopRenderSlidesMessage = { input: DesktopRenderSlidesInput; type: typeof SIDECAR_MESSAGES.RENDER_SLIDES };
+export type DesktopExportArtifactMessage = { input: DesktopExportArtifactInput; type: typeof SIDECAR_MESSAGES.EXPORT_ARTIFACT };
 export type DesktopUpdateMessage = { input: DesktopUpdateInput; type: typeof SIDECAR_MESSAGES.UPDATE };
 
 // Sent by the desktop main process to the daemon over its sidecar IPC at
@@ -354,10 +514,25 @@ export type RegisterDesktopAuthResult = {
   accepted: true;
 };
 
+export type MintImportTokenInput = {
+  baseDir: string;
+};
+
+export type MintImportTokenMessage = {
+  input: MintImportTokenInput;
+  type: typeof SIDECAR_MESSAGES.MINT_IMPORT_TOKEN;
+};
+
+export type MintImportTokenResult =
+  | { ok: true; expiresAt: string; token: string }
+  | { ok: false; code: "DESKTOP_AUTH_INACTIVE"; message: string; retryable: false }
+  | { ok: false; code: "DESKTOP_AUTH_PENDING"; message: string; retryable: true };
+
 export type DaemonSidecarMessage =
   | SidecarStatusMessage
   | SidecarShutdownMessage
-  | RegisterDesktopAuthMessage;
+  | RegisterDesktopAuthMessage
+  | MintImportTokenMessage;
 export type WebSidecarMessage = SidecarStatusMessage | SidecarShutdownMessage;
 export type DesktopSidecarMessage =
   | SidecarStatusMessage
@@ -365,8 +540,11 @@ export type DesktopSidecarMessage =
   | DesktopEvalMessage
   | DesktopScreenshotMessage
   | DesktopConsoleMessage
+  | DesktopShowMessage
   | DesktopClickMessage
   | DesktopExportPdfMessage
+  | DesktopRenderSlidesMessage
+  | DesktopExportArtifactMessage
   | DesktopUpdateMessage;
 
 export type ShutdownResult = {
@@ -549,6 +727,12 @@ function normalizeRegisterDesktopAuthInput(input: unknown): RegisterDesktopAuthI
   return { secret };
 }
 
+function normalizeMintImportTokenInput(input: unknown): MintImportTokenInput {
+  const value = assertObject(input, "mint-import-token input");
+  assertKnownKeys(value, ["baseDir"], "mint-import-token input");
+  return { baseDir: normalizeNonEmptyString(value.baseDir, "mint-import-token baseDir") };
+}
+
 function normalizeBoolean(value: unknown, label: string): boolean {
   if (typeof value !== "boolean") throw new Error(`${label} must be a boolean`);
   return value;
@@ -563,6 +747,83 @@ function normalizeDesktopExportPdfInput(input: unknown): DesktopExportPdfInput {
     defaultFilename: normalizeNonEmptyString(value.defaultFilename, "desktop PDF export defaultFilename"),
     html: normalizeNonEmptyString(value.html, "desktop PDF export html"),
     title: normalizeNonEmptyString(value.title, "desktop PDF export title"),
+  };
+}
+
+function normalizeDesktopRenderSlidesInput(input: unknown): DesktopRenderSlidesInput {
+  const value = assertObject(input, "desktop render slides input");
+  assertKnownKeys(value, ["baseHref", "deck", "editable", "height", "html", "index", "outputDir", "pageImageFormat", "stitch", "paginate", "width"], "desktop render slides input");
+  if (value.deck != null && typeof value.deck !== "boolean") {
+    throw new Error("desktop render slides deck must be a boolean");
+  }
+  if (value.editable != null && typeof value.editable !== "boolean") {
+    throw new Error("desktop render slides editable must be a boolean");
+  }
+  if (value.index != null && (typeof value.index !== "number" || !Number.isInteger(value.index) || value.index < 0)) {
+    throw new Error("desktop render slides index must be a non-negative integer");
+  }
+  if (value.pageImageFormat != null && value.pageImageFormat !== "png" && value.pageImageFormat !== "jpeg") {
+    throw new Error("desktop render slides pageImageFormat must be 'png' or 'jpeg'");
+  }
+  if (value.stitch != null && typeof value.stitch !== "boolean") {
+    throw new Error("desktop render slides stitch must be a boolean");
+  }
+  if (value.paginate != null && typeof value.paginate !== "boolean") {
+    throw new Error("desktop render slides paginate must be a boolean");
+  }
+  if (value.outputDir != null) {
+    const dir = normalizeNonEmptyString(value.outputDir, "desktop render slides outputDir");
+    // outputDir is a daemon-owned absolute scratch path; reject relative values
+    // so a malformed request can't make desktop main write outside it. Accepts
+    // POSIX (`/…`), Windows drive (`C:\…` / `C:/…`), and UNC (`\\…`) absolutes.
+    if (!/^(\/|[A-Za-z]:[\\/]|\\\\)/.test(dir)) {
+      throw new Error("desktop render slides outputDir must be an absolute path");
+    }
+  }
+  return {
+    ...(value.baseHref == null ? {} : { baseHref: normalizeNonEmptyString(value.baseHref, "desktop render slides baseHref") }),
+    ...(value.deck == null ? {} : { deck: value.deck }),
+    ...(value.editable == null ? {} : { editable: value.editable }),
+    html: normalizeNonEmptyString(value.html, "desktop render slides html"),
+    ...(value.index == null ? {} : { index: value.index }),
+    ...(value.outputDir == null ? {} : { outputDir: normalizeNonEmptyString(value.outputDir, "desktop render slides outputDir") }),
+    ...(value.pageImageFormat == null ? {} : { pageImageFormat: value.pageImageFormat }),
+    ...(value.stitch == null ? {} : { stitch: value.stitch }),
+    ...(value.paginate == null ? {} : { paginate: value.paginate }),
+    ...(value.width == null ? {} : { width: normalizeOptionalPositiveNumber(value.width, "desktop render slides width") }),
+    ...(value.height == null ? {} : { height: normalizeOptionalPositiveNumber(value.height, "desktop render slides height") }),
+  };
+}
+
+function normalizeOptionalPositiveNumber(value: unknown, label: string): number | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${label} must be a positive number`);
+  }
+  return value;
+}
+
+const DESKTOP_EXPORT_ARTIFACT_FORMATS: readonly DesktopExportArtifactFormat[] = ["pdf", "image"];
+const DESKTOP_EXPORT_ARTIFACT_IMAGE_FORMATS: readonly DesktopExportArtifactImageFormat[] = ["png", "jpeg"];
+
+function normalizeDesktopExportArtifactInput(input: unknown): DesktopExportArtifactInput {
+  const value = assertObject(input, "desktop artifact export input");
+  assertKnownKeys(value, ["baseHref", "deck", "format", "html", "imageFormat", "title", "width", "height"], "desktop artifact export input");
+  if (!DESKTOP_EXPORT_ARTIFACT_FORMATS.includes(value.format as DesktopExportArtifactFormat)) {
+    throw new Error(`unsupported artifact export format: ${String(value.format)}`);
+  }
+  if (value.imageFormat != null && !DESKTOP_EXPORT_ARTIFACT_IMAGE_FORMATS.includes(value.imageFormat as DesktopExportArtifactImageFormat)) {
+    throw new Error(`unsupported artifact export image format: ${String(value.imageFormat)}`);
+  }
+  return {
+    ...(value.baseHref == null ? {} : { baseHref: normalizeNonEmptyString(value.baseHref, "desktop artifact export baseHref") }),
+    deck: normalizeBoolean(value.deck, "desktop artifact export deck"),
+    format: value.format as DesktopExportArtifactFormat,
+    html: normalizeNonEmptyString(value.html, "desktop artifact export html"),
+    ...(value.imageFormat == null ? {} : { imageFormat: value.imageFormat as DesktopExportArtifactImageFormat }),
+    title: normalizeNonEmptyString(value.title, "desktop artifact export title"),
+    ...(value.width == null ? {} : { width: normalizeOptionalPositiveNumber(value.width, "desktop artifact export width")! }),
+    ...(value.height == null ? {} : { height: normalizeOptionalPositiveNumber(value.height, "desktop artifact export height")! }),
   };
 }
 
@@ -597,6 +858,10 @@ export function normalizeDaemonSidecarMessage(input: unknown): DaemonSidecarMess
     assertKnownKeys(value, ["input", "type"], "daemon sidecar message");
     return { input: normalizeRegisterDesktopAuthInput(value.input), type };
   }
+  if (type === SIDECAR_MESSAGES.MINT_IMPORT_TOKEN) {
+    assertKnownKeys(value, ["input", "type"], "daemon sidecar message");
+    return { input: normalizeMintImportTokenInput(value.input), type };
+  }
   throw new SidecarContractError(SIDECAR_ERROR_CODES.UNKNOWN_MESSAGE, `unknown daemon sidecar message: ${type}`);
 }
 
@@ -617,6 +882,7 @@ export function normalizeDesktopSidecarMessage(input: unknown): DesktopSidecarMe
     case SIDECAR_MESSAGES.STATUS:
     case SIDECAR_MESSAGES.SHUTDOWN:
     case SIDECAR_MESSAGES.CONSOLE:
+    case SIDECAR_MESSAGES.SHOW:
       assertKnownKeys(value, ["type"], "desktop sidecar message");
       return { type };
     case SIDECAR_MESSAGES.EVAL:
@@ -631,6 +897,12 @@ export function normalizeDesktopSidecarMessage(input: unknown): DesktopSidecarMe
     case SIDECAR_MESSAGES.EXPORT_PDF:
       assertKnownKeys(value, ["input", "type"], "desktop sidecar message");
       return { input: normalizeDesktopExportPdfInput(value.input), type };
+    case SIDECAR_MESSAGES.RENDER_SLIDES:
+      assertKnownKeys(value, ["input", "type"], "desktop sidecar message");
+      return { input: normalizeDesktopRenderSlidesInput(value.input), type };
+    case SIDECAR_MESSAGES.EXPORT_ARTIFACT:
+      assertKnownKeys(value, ["input", "type"], "desktop sidecar message");
+      return { input: normalizeDesktopExportArtifactInput(value.input), type };
     case SIDECAR_MESSAGES.UPDATE:
       assertKnownKeys(value, ["input", "type"], "desktop sidecar message");
       return { input: normalizeDesktopUpdateInput(value.input), type };

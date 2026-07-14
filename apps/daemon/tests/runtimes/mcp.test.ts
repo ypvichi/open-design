@@ -1,28 +1,30 @@
 import { test } from 'vitest';
 import { createLiveArtifactsMcpTools, handleLiveArtifactsMcpRequest } from '../../src/mcp-live-artifacts-server.js';
-import { AGENT_DEFS, assert, buildLiveArtifactsMcpServersForAgent, hermes, kimi } from './helpers/test-helpers.js';
+import { AGENT_DEFS, assert, buildLiveArtifactsMcpServersForAgent, hermes } from './helpers/test-helpers.js';
 
 test('live artifact MCP discovery is limited to mature ACP agents', () => {
-  assert.deepEqual(buildLiveArtifactsMcpServersForAgent(hermes), [
-    {
-      name: 'open-design-live-artifacts',
-      command: 'od',
-      args: ['mcp', 'live-artifacts'],
-      env: [{ name: 'ELECTRON_RUN_AS_NODE', value: '1' }],
-    },
-  ]);
-  assert.deepEqual(buildLiveArtifactsMcpServersForAgent(kimi), [
-    {
-      name: 'open-design-live-artifacts',
-      command: 'od',
-      args: ['mcp', 'live-artifacts'],
-      env: [{ name: 'ELECTRON_RUN_AS_NODE', value: '1' }],
-    },
-  ]);
-
   for (const agent of AGENT_DEFS) {
-    if (agent.id === 'hermes' || agent.id === 'kimi') continue;
-    assert.deepEqual(buildLiveArtifactsMcpServersForAgent(agent), []);
+    const server = buildLiveArtifactsMcpServersForAgent(agent);
+    if (agent.mcpDiscovery !== 'mature-acp') {
+      assert.deepEqual(server, []);
+      continue;
+    }
+    assert.equal(server.length, 1);
+    const s = server[0];
+    if (!s) throw new Error('unreachable: server length verified as 1 above');
+    assert.equal(s.name, 'open-design-live-artifacts');
+    assert.equal(s.command, 'od');
+    assert.deepEqual(s.args, ['mcp', 'live-artifacts']);
+    const envIsMap =
+      typeof s.env === 'object' && s.env !== null && !Array.isArray(s.env);
+    const envIsArray = Array.isArray(s.env);
+    assert.ok(envIsArray || envIsMap, `env must be array or map, got ${typeof s.env}`);
+    if (envIsArray) {
+      assert.deepEqual(s.env, [{ name: 'ELECTRON_RUN_AS_NODE', value: '1' }]);
+    }
+    if (envIsMap) {
+      assert.deepEqual(s.env, { ELECTRON_RUN_AS_NODE: '1' });
+    }
   }
 });
 

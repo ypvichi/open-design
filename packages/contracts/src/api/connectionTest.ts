@@ -3,6 +3,7 @@
 // and returns it inside a JSON envelope (always HTTP 200 — see notes in the
 // daemon module for why).
 import type { AgentCliEnvPrefs } from './app-config';
+import type { ReasoningExecutionRequestFields } from './reasoningExecution';
 
 export interface BaseUrlValidationResult {
   parsed?: ParsedBaseUrl;
@@ -107,7 +108,52 @@ export function isBlockedExternalApiHostname(hostname: string): boolean {
   return Boolean(mapped && isBlockedIpv4(mapped));
 }
 
-export function validateBaseUrl(baseUrl: string): BaseUrlValidationResult {
+// Normalized forms a hostname can be matched under: the bracket-stripped,
+// lowercased, trailing-dot-stripped string plus, for IPv4-mapped IPv6
+// literals, the dotted-quad form. Both an allowlist entry and a candidate
+// host are reduced through this so `10.0.0.5`, `10.0.0.5.`, `[::ffff:10.0.0.5]`
+// and `10.0.0.5` all compare equal.
+function internalHostMatchForms(hostname: string): string[] {
+  const normalized = normalizeBracketedIpv6(hostname);
+  const forms = new Set<string>([normalized]);
+  const mapped = ipv4MappedToDotted(hostname);
+  if (mapped) forms.add(mapped.toLowerCase());
+  return [...forms];
+}
+
+// Issue #3225 — explicit, operator-declared escape hatch from the
+// default-deny internal-IP guard. Returns true only when `hostname` matches
+// a host the operator deliberately trusted (see `OD_ALLOWED_INTERNAL_HOSTS`
+// on the daemon). An empty/absent allowlist always returns false, so the
+// strict default is preserved unless an operator opts in. This is consulted
+// ONLY for user-configured provider endpoints, never for the
+// attacker-controllable asset-download SSRF guard.
+export function isAllowlistedInternalHost(
+  hostname: string,
+  allowedInternalHosts?: readonly string[],
+): boolean {
+  if (!allowedInternalHosts || allowedInternalHosts.length === 0) return false;
+  const candidateForms = internalHostMatchForms(hostname);
+  for (const entry of allowedInternalHosts) {
+    if (typeof entry !== 'string' || !entry.trim()) continue;
+    const entryForms = internalHostMatchForms(entry.trim());
+    if (entryForms.some((form) => candidateForms.includes(form))) return true;
+  }
+  return false;
+}
+
+export interface ValidateBaseUrlOptions {
+  // Hosts the operator has explicitly declared trusted (issue #3225). Each
+  // entry is a bare hostname or IP literal; a host that matches is exempted
+  // from the internal-IP block. Defaults to none, keeping the strict
+  // default-deny behavior for every caller that does not opt in.
+  allowedInternalHosts?: readonly string[];
+}
+
+export function validateBaseUrl(
+  baseUrl: string,
+  options: ValidateBaseUrlOptions = {},
+): BaseUrlValidationResult {
   let parsed: ParsedBaseUrl;
   try {
     parsed = new URL(String(baseUrl).replace(/\/+$/, ''));
@@ -118,7 +164,11 @@ export function validateBaseUrl(baseUrl: string): BaseUrlValidationResult {
     return { error: 'Only http/https allowed' };
   }
   const hostname = parsed.hostname.toLowerCase();
-  if (!isLoopbackApiHost(hostname) && isBlockedExternalApiHostname(hostname)) {
+  if (
+    !isLoopbackApiHost(hostname) &&
+    !isAllowlistedInternalHost(hostname, options.allowedInternalHosts) &&
+    isBlockedExternalApiHostname(hostname)
+  ) {
     return { error: 'Internal IPs blocked', forbidden: true };
   }
   return { parsed };
@@ -139,9 +189,56 @@ export type ConnectionTestKind =
   | 'agent_spawn_failed'
   | 'unknown';
 
-export type ConnectionTestProtocol = 'anthropic' | 'openai' | 'azure' | 'google' | 'ollama' | 'senseaudio';
+// Phase markers describing how far the local agent connection test
+// progressed before it produced its result. Used inside
+// `ConnectionTestResponse.diagnostics.phase` and intended to be stable
+// across daemon versions so Settings UI and CLI consumers can render
+// phase-aware copy without re-deriving it from the free-form `detail`
+// string. See issue #2248.
+export type ConnectionTestPhase =
+  | 'binary_resolution'
+  | 'version_probe'
+  | 'model_list'
+  | 'spawn'
+  | 'connection_smoke_test'
+  | 'output_parse';
 
-export interface ProviderTestRequest {
+export interface ConnectionTestDiagnostics {
+  // How far the test progressed before producing the result. Always
+  // set on local agent test responses.
+  phase: ConnectionTestPhase;
+  // Absolute filesystem path of the executable the daemon actually
+  // attempted to run, when resolution succeeded.
+  binaryPath?: string;
+  // Best-effort version string captured during `version_probe`. Null
+  // when the CLI exposes no machine-parseable version output.
+  binaryVersion?: string | null;
+  // Child process exit metadata. Both fields keep the raw `code` /
+  // `signal` shape from `child_process` so consumers can distinguish
+  // a clean non-zero exit from a SIGTERM teardown. `signal` is typed as
+  // `string | null` (not `NodeJS.Signals`) so the generated `.d.ts`
+  // stays browser-safe — the daemon writes one of the
+  // `NodeJS.Signals` literals here but consumers never need to import
+  // ambient Node namespaces just to read an HTTP response shape.
+  exitCode?: number | null;
+  signal?: string | null;
+  // Last ~400 bytes of the child's streams, already passed through
+  // the daemon's secret redactor.
+  stdoutTail?: string;
+  stderrTail?: string;
+}
+
+export type ConnectionTestProtocol =
+  | 'anthropic'
+  | 'openai'
+  | 'azure'
+  | 'google'
+  | 'ollama'
+  | 'senseaudio'
+  | 'aihubmix'
+  | 'bedrock';
+
+export interface ProviderTestRequest extends ReasoningExecutionRequestFields {
   protocol: ConnectionTestProtocol;
   baseUrl: string;
   apiKey: string;
@@ -183,4 +280,11 @@ export interface ConnectionTestResponse {
   detectedExecutablePath?: string;
   usedExecutablePath?: string;
   usedExecutableSource?: 'configured' | 'path' | 'fallback_invalid' | 'fallback_failed';
+  // Structured diagnostics for the local agent connection test path
+  // (#2248). Optional and additive: existing consumers that only read
+  // `kind` and `detail` keep working unchanged. Populated on local
+  // agent test responses — including early failures that never reach
+  // the spawn step (unknown agent id, unresolved binary, preflight
+  // auth probe). Provider tests omit it.
+  diagnostics?: ConnectionTestDiagnostics;
 }

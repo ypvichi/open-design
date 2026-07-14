@@ -153,7 +153,9 @@ pnpm tools-dev run web
 #      Design system / Image / Video / Audio)
 #    - Find your skill in the picker
 #    - Click it, paste the example_prompt
-#    - Watch the artifact stream into .od/artifacts/<run-id>/
+#    - Watch the artifact stream in the UI. This guide MUST NOT define daemon
+#      data paths; read the root AGENTS.md section "Daemon data directory
+#      contract" before changing or documenting artifact storage.
 #    - Verify preview iframe renders correctly
 #    - Verify export (PPTX / PDF) works if the mode supports it
 ```
@@ -192,6 +194,7 @@ The `e2e/tests/localized-content.test.ts` test enforces that every directory und
 For a non-featured skill, the cheap path is to keep the source metadata complete:
 
 - [ ] **Ensure `SKILL.md` has complete English display copy**: title/name, description, example prompt, and any picker metadata required by the skill schema. The localized runtime uses these fields as the fallback display path.
+- [ ] **Use optional localized display fields when useful**: `en_name` / `zh_name`, `en_description` / `zh_description`, and `od.example_prompt_i18n.<locale>`. Keep `description` and `od.example_prompt` in English because those are the fallback fields for every locale without localized copy.
 - [ ] **Run `pnpm --filter @open-design/web test` and `pnpm --filter @open-design/e2e test tests/localized-content.test.ts`** locally before pushing. These suites catch undisplayable discovered resources and verify localized fallback behavior.
 
 ### Featured skills (optional path)

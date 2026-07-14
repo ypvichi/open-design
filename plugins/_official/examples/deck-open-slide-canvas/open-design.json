@@ -2,9 +2,19 @@
   "$schema": "https://open-design.ai/schemas/plugin.v1.json",
   "specVersion": "1.0.0",
   "name": "example-deck-open-slide-canvas",
-  "title": "1920 画布自由 Deck",
+  "title": "Write an Architecture Review like a World-Class Staff Engineer",
+  "title_i18n": {
+    "en": "Write an Architecture Review like a World-Class Staff Engineer",
+    "zh-CN": "像世界级 Staff Engineer 一样写架构评审",
+    "zh-TW": "像世界级 Staff Engineer 一样写架构评审"
+  },
   "version": "0.1.0",
-  "description": "锁死 1920×1080 画布, React 组件级自由组合, 不绑模板",
+  "description": "Open Design's architecture review: the local daemon + agent-runtime design, the tradeoffs, and the decision to lock. Built as a decision-grade product management deck for staff eng, tech leads, security.",
+  "description_i18n": {
+    "en": "Open Design's architecture review: the local daemon + agent-runtime design, the tradeoffs, and the decision to lock. Built as a decision-grade product management deck for staff eng, tech leads, security.",
+    "zh-CN": "像世界级 Staff Engineer 一样写架构评审——一份可商业交付的产品管理 Deck，围绕真实主题、证据链与决策目标组织。",
+    "zh-TW": "像世界级 Staff Engineer 一样写架构评审——一份可商业交付的产品管理 Deck，围绕真实主题、证据链与决策目标组织。"
+  },
   "license": "MIT",
   "author": {
     "name": "Open Design",
@@ -21,7 +31,16 @@
     "open-slide",
     "freeform",
     "1920",
-    "react"
+    "react",
+    "product",
+    "roadmap",
+    "architecture",
+    "deck-open-slide-canvas",
+    "product-and-technical-management",
+    "product-management",
+    "pm-feature-business-case-deck",
+    "decision-deck",
+    "commercial-slide-agent"
   ],
   "compat": {
     "agentSkills": [
@@ -34,7 +53,7 @@
     "kind": "scenario",
     "taskKind": "new-generation",
     "mode": "deck",
-    "scenario": "design",
+    "scenario": "product",
     "surface": "web",
     "featured": 0.17,
     "preview": {
@@ -42,11 +61,19 @@
       "entry": "./example.html"
     },
     "useCase": {
-      "query": "用「1920 画布自由 Deck」模板把我的内容做成一套「锁死 1920×1080 画布, React 组件级自由组合, 不绑模板」。保持模板的视觉签名，使用真实内容和数据，避免 lorem ipsum 和占位图片。",
+      "query": {
+        "en": "Create \"Write an Architecture Review like a World-Class Staff Engineer\" as a decision-grade Product management deck in this template's own visual system. Subject: Open Design's architecture review: the local daemon + agent-runtime design, the tradeoffs, and the decision to lock. Audience: staff eng, tech leads, security. First ask only for missing essentials: audience, decision target, source-of-truth materials, deadline, and must-keep numbers. Then produce the slide plan, written slides, visual direction, speaker-ready structure, and a critic pass against this rubric: can cross-functional reviewers agree on the next irreversible step.",
+        "zh-CN": "像世界级 Staff Engineer 一样写架构评审。像世界级 Staff Engineer 一样写架构评审——一份可商业交付的产品管理 Deck，围绕真实主题、证据链与决策目标组织。 主题：Open Design's architecture review: the local daemon + agent-runtime design, the tradeoffs, and the decision to lock. 先确认受众、决策目标、素材来源、截止时间和必须保留的数据，再输出叙事主线、页面规划、逐页文案、视觉方向和按评审标准自检的版本。"
+      },
       "exampleOutputs": [
         {
           "path": "./example.html",
-          "title": "1920 画布自由 Deck"
+          "title": "Write an Architecture Review like a World-Class Staff Engineer",
+          "title_i18n": {
+            "en": "Write an Architecture Review like a World-Class Staff Engineer",
+            "zh-CN": "像世界级 Staff Engineer 一样写架构评审",
+            "zh-TW": "像世界级 Staff Engineer 一样写架构评审"
+          }
         }
       ]
     },
@@ -74,6 +101,7 @@
     "capabilities": [
       "prompt:inject",
       "fs:write"
-    ]
+    ],
+    "category": "product-management"
   }
 }

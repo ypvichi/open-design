@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   hasTweaksTemplate,
   hasUrlModeBridge,
+  htmlNeedsFocusGuard,
+  htmlNeedsPoweredPreview,
   htmlNeedsSandboxShim,
   parseForceInline,
   shouldUrlLoadHtmlPreview,
@@ -19,7 +21,7 @@ describe('shouldUrlLoadHtmlPreview', () => {
     expect(shouldUrlLoadHtmlPreview({ ...base, isDeck: true })).toBe(false);
   });
 
-  it('falls back to srcDoc when comment mode is active without an artifact-owned bridge', () => {
+  it('falls back to srcDoc when comment mode is active without a URL bridge', () => {
     expect(shouldUrlLoadHtmlPreview({ ...base, commentMode: true })).toBe(false);
   });
 
@@ -27,20 +29,28 @@ describe('shouldUrlLoadHtmlPreview', () => {
     expect(shouldUrlLoadHtmlPreview({ ...base, commentMode: true, urlModeBridge: true })).toBe(true);
   });
 
+  it('keeps URL-load when comment mode is active and the raw route injects the comment bridge', () => {
+    expect(shouldUrlLoadHtmlPreview({ ...base, commentMode: true, urlCommentBridge: true })).toBe(true);
+  });
+
   it('falls back to srcDoc when direct edit mode is active without an artifact-owned bridge', () => {
     expect(shouldUrlLoadHtmlPreview({ ...base, editMode: true })).toBe(false);
   });
 
-  it('keeps URL-load when direct edit mode is active and the artifact owns the bridge', () => {
-    expect(shouldUrlLoadHtmlPreview({ ...base, editMode: true, urlModeBridge: true })).toBe(true);
+  it('falls back to srcDoc when direct edit mode is active even if the artifact owns a URL bridge', () => {
+    expect(shouldUrlLoadHtmlPreview({ ...base, editMode: true, urlModeBridge: true })).toBe(false);
   });
 
   it('falls back to srcDoc when inspect mode is active (selection bridge required)', () => {
     expect(shouldUrlLoadHtmlPreview({ ...base, inspectMode: true })).toBe(false);
   });
 
-  it('falls back to srcDoc when draw mode is active (snapshot bridge required)', () => {
+  it('falls back to srcDoc when draw mode is active without a URL snapshot bridge', () => {
     expect(shouldUrlLoadHtmlPreview({ ...base, drawMode: true })).toBe(false);
+  });
+
+  it('keeps URL-load when draw mode is active and the raw route injected the snapshot bridge', () => {
+    expect(shouldUrlLoadHtmlPreview({ ...base, drawMode: true, urlSnapshotBridge: true })).toBe(true);
   });
 
   it('falls back to srcDoc when the artifact ships the class based tweaks template', () => {
@@ -54,6 +64,17 @@ describe('shouldUrlLoadHtmlPreview', () => {
     expect(shouldUrlLoadHtmlPreview({ ...base, forceInline: true })).toBe(false);
   });
 
+  it('falls back to srcDoc when the HTML source needs a focus guard', () => {
+    expect(shouldUrlLoadHtmlPreview({ ...base, needsFocusGuard: true })).toBe(false);
+  });
+
+  it('falls back to srcDoc when the source references project files by site-root path', () => {
+    // URL-load serves the document untouched, so `/reference-assets/main.css`
+    // resolves against the app origin root and 404s; only the srcDoc pipeline
+    // rewrites confirmed root-relative refs into resolvable URLs.
+    expect(shouldUrlLoadHtmlPreview({ ...base, projectRootAssetRefs: true })).toBe(false);
+  });
+
   it('does not URL-load while the source-code tab is active', () => {
     expect(shouldUrlLoadHtmlPreview({ ...base, mode: 'source' })).toBe(false);
   });
@@ -64,6 +85,7 @@ describe('shouldUrlLoadHtmlPreview', () => {
     expect(shouldUrlLoadHtmlPreview({ ...base, commentMode: true, forceInline: true })).toBe(false);
     expect(shouldUrlLoadHtmlPreview({ ...base, tweaksBridge: true, forceInline: true })).toBe(false);
     expect(shouldUrlLoadHtmlPreview({ ...base, commentMode: true, urlModeBridge: true, inspectMode: true })).toBe(false);
+    expect(shouldUrlLoadHtmlPreview({ ...base, drawMode: true, urlSnapshotBridge: true, inspectMode: true })).toBe(false);
   });
 });
 
@@ -193,12 +215,14 @@ describe('htmlNeedsSandboxShim', () => {
     expect(htmlNeedsSandboxShim('<script type=text/babelish></script>')).toBe(false);
   });
 
-  it('does not match plain <script> tags or unrelated MIME types', () => {
-    expect(htmlNeedsSandboxShim('<script src="app.js"></script>')).toBe(false);
-    expect(htmlNeedsSandboxShim('<script type="module" src="app.js"></script>')).toBe(false);
+  it('does not match unrelated MIME types or inline-only <script> tags', () => {
+    // Inline JSON data island — no executable code, no Web Storage access.
     expect(htmlNeedsSandboxShim('<script type="application/json">{}</script>')).toBe(false);
     // Substring-only matches must not trigger (e.g. text/babel-like custom type).
     expect(htmlNeedsSandboxShim('<script type="text/babelish"></script>')).toBe(false);
+    // A bare inline <script> without src= and without a Web Storage mention
+    // is left alone (URL-load can render it fine without the shim).
+    expect(htmlNeedsSandboxShim('<script>console.log("hi")</script>')).toBe(false);
   });
 
   it('detects direct localStorage / sessionStorage references in the source', () => {
@@ -213,5 +237,134 @@ describe('htmlNeedsSandboxShim', () => {
     expect(htmlNeedsSandboxShim('Storage')).toBe(false);
     expect(htmlNeedsSandboxShim('mylocalStorageWrapper')).toBe(false);
     expect(htmlNeedsSandboxShim('SuperLocalStorage')).toBe(false);
+  });
+
+  // Issue #2361 — Tweaks and animations problems
+  // Agent-emitted artifacts commonly read `localStorage` from an *external*
+  // script (e.g. `<script src="boot.js">` that initializes theme/language).
+  // The parent string scan can't see the script body, so prior to #2361 the
+  // helper returned false, the preview took the URL-load path, and the
+  // sandboxed iframe threw `SecurityError` on first read — leaving the
+  // artifact blank until the user toggled Tweaks (which forces srcDoc and
+  // pulls in `injectSandboxShim`). Conservatively route any external script
+  // through srcDoc so the shim is available from the start.
+  it('flags any external <script src=> as needing the shim (issue #2361)', () => {
+    // Plain external script — the original reporter's repro shape.
+    expect(htmlNeedsSandboxShim('<script src="boot.js"></script>')).toBe(true);
+    // ES module import.
+    expect(htmlNeedsSandboxShim('<script type="module" src="main.js"></script>')).toBe(true);
+    // Attributes between <script and src= (defer / async / nonce / crossorigin).
+    expect(htmlNeedsSandboxShim('<script defer src="./app.js"></script>')).toBe(true);
+    expect(htmlNeedsSandboxShim('<script async src="https://cdn.example.com/lib.js"></script>')).toBe(true);
+    // Single-quoted src.
+    expect(htmlNeedsSandboxShim("<script src='./bundle.js'></script>")).toBe(true);
+    // Whitespace around the equals sign.
+    expect(htmlNeedsSandboxShim('<script src = "./bundle.js"></script>')).toBe(true);
+    // Unquoted src value (HTML5 permits unquoted attrs).
+    expect(htmlNeedsSandboxShim('<script src=boot.js></script>')).toBe(true);
+    // Case-insensitive tag name.
+    expect(htmlNeedsSandboxShim('<SCRIPT SRC="boot.js"></SCRIPT>')).toBe(true);
+  });
+
+  it('does not match incidental "src=" in non-script contexts (issue #2361 regression)', () => {
+    // `<img src=>` is not an executable subresource for our purposes.
+    expect(htmlNeedsSandboxShim('<img src="logo.png">')).toBe(false);
+    // `<link rel="stylesheet" href=>` similarly does not run JavaScript.
+    expect(htmlNeedsSandboxShim('<link rel="stylesheet" href="styles.css">')).toBe(false);
+    // Text content mentioning `script src=` (e.g. a docs page) must not trigger.
+    expect(htmlNeedsSandboxShim('<p>Use <code>&lt;script src=&quot;app.js&quot;&gt;</code></p>')).toBe(false);
+  });
+});
+
+describe('htmlNeedsFocusGuard', () => {
+  it('returns false for plain static HTML', () => {
+    expect(htmlNeedsFocusGuard('<!doctype html><h1>hello</h1>')).toBe(false);
+  });
+
+  it('detects window.focus() calls', () => {
+    expect(htmlNeedsFocusGuard('<script>window.focus();</script>')).toBe(true);
+    expect(htmlNeedsFocusGuard('<script>window .focus()</script>')).toBe(true);
+    expect(htmlNeedsFocusGuard('<script>WINDOW.FOCUS()</script>')).toBe(true);
+  });
+
+  it('detects document.body.focus() calls', () => {
+    expect(htmlNeedsFocusGuard('<script>document.body.focus();</script>')).toBe(true);
+    expect(htmlNeedsFocusGuard('<script>document.body .focus()</script>')).toBe(true);
+  });
+
+  it('detects querySelector(...).focus() and chained focus calls', () => {
+    expect(htmlNeedsFocusGuard('<script>document.querySelector("input").focus()</script>')).toBe(true);
+    expect(htmlNeedsFocusGuard('<script>document.getElementById("x").focus()</script>')).toBe(true);
+    expect(htmlNeedsFocusGuard('<script>myInput.focus()</script>')).toBe(true);
+  });
+
+  it('detects autofocus attributes', () => {
+    expect(htmlNeedsFocusGuard('<input autofocus>')).toBe(true);
+    expect(htmlNeedsFocusGuard('<input AUTOFOCUS>')).toBe(true);
+    expect(htmlNeedsFocusGuard('<textarea autofocus></textarea>')).toBe(true);
+  });
+
+  it('detects external script references that may call focus at load', () => {
+    expect(htmlNeedsFocusGuard('<script src="./boot.js"></script>')).toBe(true);
+    expect(htmlNeedsFocusGuard('<script src="app.js"></script>')).toBe(true);
+    expect(htmlNeedsFocusGuard('<script defer src="./assets/init.js"></script>')).toBe(true);
+    expect(htmlNeedsFocusGuard('<SCRIPT SRC="main.js"></SCRIPT>')).toBe(true);
+  });
+
+  it('does not match inline scripts without focus calls', () => {
+    expect(htmlNeedsFocusGuard('<script>console.log("hello")</script>')).toBe(false);
+    expect(htmlNeedsFocusGuard('<script type="application/json">{}</script>')).toBe(false);
+  });
+
+  it('does not match unrelated focus mentions', () => {
+    expect(htmlNeedsFocusGuard('<div class="focus-ring">')).toBe(false);
+    expect(htmlNeedsFocusGuard('// focus the element')).toBe(false);
+    expect(htmlNeedsFocusGuard(':focus')).toBe(false);
+    expect(htmlNeedsFocusGuard('focus-visible')).toBe(false);
+  });
+});
+
+describe('htmlNeedsPoweredPreview', () => {
+  it('returns false for empty / null input', () => {
+    expect(htmlNeedsPoweredPreview('')).toBe(false);
+    expect(htmlNeedsPoweredPreview(null)).toBe(false);
+    expect(htmlNeedsPoweredPreview(undefined)).toBe(false);
+  });
+
+  it('matches SharedArrayBuffer (needs cross-origin isolation)', () => {
+    expect(htmlNeedsPoweredPreview('const b = new SharedArrayBuffer(16);')).toBe(true);
+  });
+
+  it('matches Web Worker / SharedWorker construction', () => {
+    expect(htmlNeedsPoweredPreview("const w = new Worker('sort.js');")).toBe(true);
+    expect(htmlNeedsPoweredPreview('new SharedWorker(url)')).toBe(true);
+    expect(htmlNeedsPoweredPreview('new  Worker(blobUrl)')).toBe(true);
+  });
+
+  it('matches importScripts inside a worker', () => {
+    expect(htmlNeedsPoweredPreview("importScripts('lib.js')")).toBe(true);
+  });
+
+  it('matches WASM streaming and .wasm references', () => {
+    expect(htmlNeedsPoweredPreview('WebAssembly.instantiateStreaming(fetch(u))')).toBe(true);
+    expect(htmlNeedsPoweredPreview('WebAssembly.compileStreaming(r)')).toBe(true);
+    expect(htmlNeedsPoweredPreview('fetch("engine.wasm")')).toBe(true);
+  });
+
+  it('matches WebGL2 / OffscreenCanvas / WebGPU', () => {
+    expect(htmlNeedsPoweredPreview('canvas.getContext("webgl2")')).toBe(true);
+    expect(htmlNeedsPoweredPreview("el.getContext('webgl2', {})")).toBe(true);
+    expect(htmlNeedsPoweredPreview('new OffscreenCanvas(8, 8)')).toBe(true);
+    expect(htmlNeedsPoweredPreview('const a = navigator.gpu')).toBe(true);
+  });
+
+  it('does NOT match a plain WebGL1 canvas demo (runs fine in the opaque sandbox)', () => {
+    expect(htmlNeedsPoweredPreview("canvas.getContext('webgl')")).toBe(false);
+    expect(htmlNeedsPoweredPreview("canvas.getContext('2d')")).toBe(false);
+  });
+
+  it('does NOT match unrelated prose that mentions the words', () => {
+    expect(htmlNeedsPoweredPreview('<p>Our web worker culture is great</p>')).toBe(false);
+    expect(htmlNeedsPoweredPreview('<p>A workshop about 3D printing</p>')).toBe(false);
   });
 });

@@ -2,9 +2,19 @@
   "$schema": "https://open-design.ai/schemas/plugin.v1.json",
   "specVersion": "1.0.0",
   "name": "example-html-ppt-zhangzara-monochrome",
-  "title": "Html Ppt Zhangzara Monochrome",
+  "title": "Write a Grant Committee Brief like a Funded Principal Investigator",
+  "title_i18n": {
+    "en": "Write a Grant Committee Brief like a Funded Principal Investigator",
+    "zh-CN": "像拿到资助的 PI 一样写基金评审简报",
+    "zh-TW": "像拿到资助的 PI 一样写基金评审简报"
+  },
   "version": "0.1.0",
-  "description": "Monochrome — Ivory ledger paper with all-black type; Lora serif headlines, Jost body, no color at all. Anything that should feel like a hand-typeset ledger: user research synthesis, white papers, longform reports, academic and policy briefs, advisory deliverables, bilingual EN/CN reports.",
+  "description": "A grant proposal on CRISPR base-editing for sickle-cell disease — the hypothesis, the approach, the milestones, and the risk. Built as a decision-grade academic research deck for grant review committee.",
+  "description_i18n": {
+    "en": "A grant proposal on CRISPR base-editing for sickle-cell disease — the hypothesis, the approach, the milestones, and the risk. Built as a decision-grade academic research deck for grant review committee.",
+    "zh-CN": "像拿到资助的 PI 一样写基金评审简报——一份可商业交付的学术研究 Deck，围绕真实主题、证据链与决策目标组织。",
+    "zh-TW": "像拿到资助的 PI 一样写基金评审简报——一份可商业交付的学术研究 Deck，围绕真实主题、证据链与决策目标组织。"
+  },
   "license": "MIT",
   "author": {
     "name": "Open Design",
@@ -26,7 +36,18 @@
     "white-paper",
     "html-deck",
     "html-slides",
-    "zhangzara"
+    "zhangzara",
+    "board",
+    "strategy",
+    "business-review",
+    "html-ppt-zhangzara-monochrome",
+    "academic-research",
+    "academic-review-deck",
+    "research",
+    "grant",
+    "review",
+    "decision-deck",
+    "commercial-slide-agent"
   ],
   "compat": {
     "agentSkills": [
@@ -39,7 +60,7 @@
     "kind": "scenario",
     "taskKind": "new-generation",
     "mode": "deck",
-    "scenario": "marketing",
+    "scenario": "research",
     "surface": "web",
     "preview": {
       "type": "html",
@@ -47,13 +68,18 @@
     },
     "useCase": {
       "query": {
-        "en": "Monochrome — Ivory ledger paper with all-black type; Lora serif headlines, Jost body, no color at all. Anything that should feel like a hand-typeset ledger: user research synthesis, white papers, longform reports, academic and policy briefs, advisory deliverables, bilingual EN/CN reports.",
-        "zh-CN": "使用这个插件完成以下任务：Monochrome — Ivory ledger paper with all-black type; Lora serif headlines, Jost body, no color at all. Anything that should feel like a hand-typeset ledger: user research synthesis, white papers, longform reports, academic and policy briefs, advisory deliverables, bilingual EN/CN reports."
+        "en": "Create \"Write a Grant Committee Brief like a Funded Principal Investigator\" as a decision-grade Academic research deck in this template's own visual system. Subject: A grant proposal on CRISPR base-editing for sickle-cell disease — the hypothesis, the approach, the milestones, and the risk. Audience: grant review committee. First ask only for missing essentials: audience, decision target, source-of-truth materials, deadline, and must-keep numbers. Then produce the slide plan, written slides, visual direction, speaker-ready structure, and a critic pass against this rubric: does the deck prove novelty without overclaiming.",
+        "zh-CN": "像拿到资助的 PI 一样写基金评审简报。像拿到资助的 PI 一样写基金评审简报——一份可商业交付的学术研究 Deck，围绕真实主题、证据链与决策目标组织。 主题：A grant proposal on CRISPR base-editing for sickle-cell disease — the hypothesis, the approach, the milestones, and the risk. 先确认受众、决策目标、素材来源、截止时间和必须保留的数据，再输出叙事主线、页面规划、逐页文案、视觉方向和按评审标准自检的版本。"
       },
       "exampleOutputs": [
         {
           "path": "./example.html",
-          "title": "Html Ppt Zhangzara Monochrome"
+          "title": "Write a Grant Committee Brief like a Funded Principal Investigator",
+          "title_i18n": {
+            "en": "Write a Grant Committee Brief like a Funded Principal Investigator",
+            "zh-CN": "像拿到资助的 PI 一样写基金评审简报",
+            "zh-TW": "像拿到资助的 PI 一样写基金评审简报"
+          }
         }
       ]
     },
@@ -81,6 +107,7 @@
     "capabilities": [
       "prompt:inject",
       "fs:write"
-    ]
+    ],
+    "category": "academic-research"
   }
 }

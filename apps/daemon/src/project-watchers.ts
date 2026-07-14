@@ -1,6 +1,7 @@
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 
+import { isIgnoredProjectDirName } from './project-ignored-dirs.js';
 import { projectDir, resolveProjectDir } from './projects.js';
 
 /**
@@ -16,24 +17,7 @@ import { projectDir, resolveProjectDir } from './projects.js';
 // against the path *relative to the watch root* so that ancestor directories
 // (e.g. the daemon's own `.od/` runtime dir, which contains every project) do
 // not accidentally match and silence every event in the tree.
-const IGNORE_NAMES = new Set([
-  '.git',
-  'node_modules',
-  '.od',
-  'debug',
-  '.DS_Store',
-  // Python virtual environments and caches — can contain tens of thousands of
-  // files, exhausting the process fd table and breaking child-process spawning.
-  // These names are safe to match at any path depth: a directory named `.venv`
-  // or `__pycache__` is never legitimate authored source in a project tree.
-  '.venv',
-  'venv',
-  '__pycache__',
-  '.mypy_cache',
-  '.pytest_cache',
-  '.tox',
-  '.ruff_cache',
-]);
+const WATCHER_ONLY_IGNORE_NAMES = new Set(['.ds_store']);
 export type ProjectWatchKind = 'add' | 'change' | 'unlink';
 export interface ProjectWatchEvent { type: 'file-changed'; path: string; kind: ProjectWatchKind }
 export type ProjectWatchCallback = (evt: ProjectWatchEvent) => void;
@@ -56,7 +40,10 @@ export function makeIgnored(rootDir: string): (absPath: string) => boolean {
   return (absPath: string): boolean => {
     const rel = path.relative(rootDir, absPath);
     if (!rel || rel === '' || rel.startsWith('..')) return false; // never ignore root itself
-    return rel.split(/[\\/]/).some((seg) => IGNORE_NAMES.has(seg));
+    return rel.split(/[\\/]/).some((seg) => {
+      const normalized = seg.toLowerCase();
+      return WATCHER_ONLY_IGNORE_NAMES.has(normalized) || isIgnoredProjectDirName(normalized);
+    });
   };
 }
 
@@ -66,7 +53,7 @@ export const DEFAULT_AWAIT_WRITE_FINISH = {
 };
 
 const registry = new Map<string, WatcherEntry>();
-const PREFERS_POLLING_IN_TESTS = process.env.NODE_ENV === 'test';
+const PREFERS_POLLING = process.env.OD_WATCHER_USE_POLLING === '1' || process.env.CHOKIDAR_USEPOLLING === '1';
 
 function isPollingFallbackError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
@@ -100,12 +87,12 @@ function makeEntry(dir: string, opts: Required<Pick<ProjectWatcherOptions, 'igno
   const subscribers = new Set<ProjectWatchCallback>();
   const entry: WatcherEntry = {
     dir,
-    watcher: createWatcher(dir, opts, PREFERS_POLLING_IN_TESTS),
+    watcher: createWatcher(dir, opts, PREFERS_POLLING),
     ready,
     subscribers,
     closing: null,
   };
-  let usingPollingFallback = PREFERS_POLLING_IN_TESTS;
+  let usingPollingFallback = PREFERS_POLLING;
   let switchingToPolling = false;
 
   const resolveReadyOnce = () => {

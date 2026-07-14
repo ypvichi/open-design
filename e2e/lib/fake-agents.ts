@@ -26,15 +26,15 @@ export type FakeAgentRuntimeOptions = {
 };
 
 const AGENT_BIN_NAMES: Record<FakeAgentId, string> = {
-  claude: 'claude-e2e.js',
-  codex: 'codex-e2e.js',
-  copilot: 'copilot-e2e.js',
-  'cursor-agent': 'cursor-agent-e2e.js',
-  deepseek: 'deepseek-e2e.js',
-  gemini: 'gemini-e2e.js',
-  opencode: 'opencode-e2e.js',
-  qoder: 'qodercli-e2e.js',
-  qwen: 'qwen-e2e.js',
+  claude: 'claude-e2e.cjs',
+  codex: 'codex-e2e.cjs',
+  copilot: 'copilot-e2e.cjs',
+  'cursor-agent': 'cursor-agent-e2e.cjs',
+  deepseek: 'deepseek-e2e.cjs',
+  gemini: 'gemini-e2e.cjs',
+  opencode: 'opencode-e2e.cjs',
+  qoder: 'qodercli-e2e.cjs',
+  qwen: 'qwen-e2e.cjs',
 };
 
 const AGENT_BIN_ENV_KEYS: Record<FakeAgentId, string> = {
@@ -51,7 +51,6 @@ const AGENT_BIN_ENV_KEYS: Record<FakeAgentId, string> = {
 
 export const FAKE_AGENT_RUNTIME_IDS: FakeAgentId[] = [
   'claude',
-  'gemini',
   'opencode',
   'cursor-agent',
   'qwen',
@@ -79,12 +78,13 @@ export async function createFakeAgentRuntimes(
   const runtimes = {} as Record<FakeAgentId, FakeAgentRuntime>;
   for (const agentId of runtimeIds) {
     const script = path.join(root, AGENT_BIN_NAMES[agentId]);
+    const parsedScript = path.parse(script);
     const bin = process.platform === 'win32'
-      ? script.replace(/\.js$/i, '.cmd')
+      ? path.join(parsedScript.dir, `${parsedScript.name}.cmd`)
       : script;
     await writeFile(script, renderFakeAgentScript(agentId), 'utf8');
     if (process.platform === 'win32') {
-      await writeFile(bin, '@echo off\r\nnode "%~dp0%~n0.js" %*\r\n', 'utf8');
+      await writeFile(bin, '@echo off\r\nnode "%~dp0%~n0.cjs" %*\r\n', 'utf8');
     } else {
       await chmod(bin, 0o755);
     }
@@ -98,6 +98,8 @@ function renderFakeAgentScript(agentId: FakeAgentId): string {
   return `#!/usr/bin/env node
 const agentId = ${JSON.stringify(agentId)};
 const args = process.argv.slice(2);
+const { mkdir, writeFile: writeFileFs } = require('node:fs/promises');
+const { join } = require('node:path');
 
 if (args.includes('--version')) {
   process.stdout.write(agentId + '-e2e 0.0.0\\n');
@@ -134,14 +136,84 @@ if (process.stdin.isTTY || agentId === 'deepseek') {
 async function emitRun(promptText) {
   if (emitted) return;
   emitted = true;
+  if (promptText.includes('Hold the daemon run open until canceled')) {
+    // Stay running (busy) without ever emitting a terminal result, so a test
+    // can queue a follow-up turn and interrupt it via send-now. Keep the event
+    // loop alive indefinitely; the daemon kills this child (SIGTERM) when the
+    // run is canceled.
+    setInterval(() => {}, 1 << 30);
+    return;
+  }
   if (promptText.includes('Return an intentional daemon smoke failure')) {
     emitFailure();
+    return;
+  }
+  if (promptText.includes('Return a daemon 429 service failure')) {
+    emitServiceFailure(429);
+    return;
+  }
+  if (promptText.includes('Return a daemon 503 service failure')) {
+    emitServiceFailure(503);
+    return;
+  }
+  if (promptText.includes('Return a daemon socket-drop failure')) {
+    emitSocketDropFailure();
     return;
   }
   if (promptText.includes('Return an empty daemon smoke response')) {
     emitEmptySuccess();
     return;
   }
+  if (promptText.includes('Return a stderr-only daemon smoke failure')) {
+    process.stderr.write('stderr-only daemon smoke failure from fake ' + agentId + '\\n');
+    process.exitCode = 1;
+    exitSoon(1);
+    return;
+  }
+  if (
+    promptText.includes('Create an Open Design plugin for:') &&
+    promptText.includes('produce a folder named generated-plugin')
+  ) {
+    await emitPluginAuthoringRun();
+    return;
+  }
+  if (promptText.includes('Create a deterministic plan document')) {
+    await emitPlanDocumentRun();
+    return;
+  }
+  // Work-completeness fixtures (#1247 / #1060): drive a Claude run that ends its
+  // turn while its TodoWrite plan still has unfinished tasks (or is truncated by
+  // max_tokens), so tests can assert the run reports endedWithUnfinishedWork.
+  if (promptText.includes('Emit an unfinished-todo run')) {
+    emitClaudeTodoRun([
+      { content: 'Draft layout', status: 'completed' },
+      { content: 'Build components', status: 'in_progress' },
+      { content: 'Run QA', status: 'pending' },
+    ], 'end_turn');
+    return;
+  }
+  if (promptText.includes('Emit a stopped-todo run')) {
+    emitClaudeTodoRun([{ content: 'Build components', status: 'stopped' }], 'end_turn');
+    return;
+  }
+  if (promptText.includes('Emit a max-tokens truncated run')) {
+    // All todos look done, but the turn was cut off — truncation alone must flag
+    // the run incomplete.
+    emitClaudeTodoRun([{ content: 'Draft layout', status: 'completed' }], 'max_tokens');
+    return;
+  }
+  if (promptText.includes('Emit an all-completed-todo run')) {
+    emitClaudeTodoRun([
+      { content: 'Draft layout', status: 'completed' },
+      { content: 'Build components', status: 'completed' },
+    ], 'end_turn');
+    return;
+  }
+  if (promptText.includes('Edit the existing deterministic smoke artifact')) {
+    await emitExistingArtifactEditRun(promptText);
+    return;
+  }
+  const isSlowReload = promptText.includes('Create a slow reload deterministic smoke artifact');
   const isDelayed = promptText.includes('Create a delayed deterministic smoke artifact');
   const isChunked = promptText.includes('Create a chunked deterministic smoke artifact');
   const isFollowUp = promptText.includes('Create a follow-up deterministic smoke artifact');
@@ -153,20 +225,131 @@ async function emitRun(promptText) {
   }
   const isRuntime = promptText.match(/Fake runtime smoke for ([a-z0-9-]+)/i);
   const runtimeId = isRuntime ? isRuntime[1] : agentId;
-  const heading = isDelayed ? 'Delayed Daemon Smoke' : isChunked ? 'Chunked Daemon Smoke' : isFollowUp ? 'Follow-up Daemon Smoke' : isDefaultSmoke ? 'Real Daemon Smoke' : 'Fake Agent Runtime ' + runtimeId;
-  const identifier = isDelayed ? 'delayed-daemon-smoke' : isChunked ? 'chunked-daemon-smoke' : isFollowUp ? 'follow-up-daemon-smoke' : isDefaultSmoke ? 'real-daemon-smoke' : 'fake-agent-runtime-' + runtimeId;
-  const text = isDelayed ? 'Generated after a delayed daemon turn.' : isChunked ? 'Chunked through the daemon run path.' : isFollowUp ? 'Generated after an earlier daemon turn.' : isDefaultSmoke ? 'Generated through the daemon run path.' : 'Generated through fake ' + runtimeId + ' runtime.';
+  const heading = isSlowReload ? 'Slow Reload Daemon Smoke' : isDelayed ? 'Delayed Daemon Smoke' : isChunked ? 'Chunked Daemon Smoke' : isFollowUp ? 'Follow-up Daemon Smoke' : isDefaultSmoke ? 'Real Daemon Smoke' : 'Fake Agent Runtime ' + runtimeId;
+  const identifier = isSlowReload ? 'slow-reload-daemon-smoke' : isDelayed ? 'delayed-daemon-smoke' : isChunked ? 'chunked-daemon-smoke' : isFollowUp ? 'follow-up-daemon-smoke' : isDefaultSmoke ? 'real-daemon-smoke' : 'fake-agent-runtime-' + runtimeId;
+  const text = isSlowReload ? 'Generated after a reload while the daemon run was active.' : isDelayed ? 'Generated after a delayed daemon turn.' : isChunked ? 'Chunked through the daemon run path.' : isFollowUp ? 'Generated after an earlier daemon turn.' : isDefaultSmoke ? 'Generated through the daemon run path.' : 'Generated through fake ' + runtimeId + ' runtime.';
   const html = '<!doctype html><html><body><main><h1>' + heading + '</h1><p>' + text + '</p></main></body></html>';
   const artifact = '<artifact identifier="' + identifier + '" type="text/html" title="' + heading + '">' + html + '</artifact>';
-  const assistantText = isDelayed
+  const assistantText = isSlowReload
+    ? 'I stayed attached after the reload and will persist the artifact now.\\n\\n' + artifact
+    : isDelayed
     ? 'I recovered the delayed reasoning path and will persist the artifact now.\\n\\n' + artifact
     : artifact;
+  if (isSlowReload) {
+    await new Promise((resolve) => setTimeout(resolve, 15_000));
+  }
   if (isDelayed) {
     await new Promise((resolve) => setTimeout(resolve, 1200));
   }
-  emitSuccess(assistantText, isChunked, isDelayed);
+  emitSuccess(assistantText, isChunked, isDelayed || isSlowReload);
   process.exitCode = 0;
   exitSoon(0);
+}
+
+async function emitPluginAuthoringRun() {
+  const folder = join(projectDir(), 'generated-plugin');
+  await mkdir(join(folder, 'examples'), { recursive: true });
+  await writeFileFs(
+    join(folder, 'open-design.json'),
+    JSON.stringify({
+      specVersion: 1,
+      name: 'generated-plugin',
+      version: '0.1.0',
+      description: 'Fake plugin authoring smoke scaffold.',
+      mode: 'agent',
+      taskKind: 'new-generation',
+      inputs: [{ id: 'prompt', type: 'string', label: 'Prompt' }],
+    }, null, 2) + '\\n',
+    'utf8',
+  );
+  await writeFileFs(
+    join(folder, 'SKILL.md'),
+    '# Generated Plugin\\n\\nThis fake plugin exists for plugin authoring smoke coverage.\\n',
+    'utf8',
+  );
+  await writeFileFs(
+    join(folder, 'examples', 'demo.md'),
+    '# Demo\\n\\nGenerated by the fake plugin authoring runtime.\\n',
+    'utf8',
+  );
+  const summary = [
+    'Created generated-plugin with open-design.json, SKILL.md, and examples/demo.md.',
+    'od plugin validate: passed',
+    'od plugin pack: generated-plugin-0.1.0.tgz',
+    'od plugin install --source: passed',
+  ].join('\\n');
+  emitSuccess(summary, false, false);
+  process.exitCode = 0;
+  exitSoon(0);
+}
+
+async function emitPlanDocumentRun() {
+  await writeFileFs(
+    join(projectDir(), 'plan.md'),
+    [
+      '# Deterministic Plan',
+      '',
+      '## Scope',
+      '- Confirm the target workflow.',
+      '- Draft the project milestones.',
+      '',
+      '## Risks',
+      '- Keep the plan editable before design handoff.',
+      '',
+    ].join('\\n'),
+    'utf8',
+  );
+  emitSuccess('Created plan.md with a deterministic planning outline.', false, false);
+  process.exitCode = 0;
+  exitSoon(0);
+}
+
+async function emitExistingArtifactEditRun(promptText) {
+  const projectId = process.env.OD_PROJECT_ID || projectIdFromPrompt(promptText);
+  const daemonUrl = process.env.OD_DAEMON_URL;
+  if (!projectId || !daemonUrl) {
+    throw new Error('fake artifact edit requires OD_PROJECT_ID and OD_DAEMON_URL');
+  }
+  const response = await fetch(new URL('/api/projects/' + encodeURIComponent(projectId) + '/files', daemonUrl), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: 'real-daemon-smoke.html',
+      content: '<!doctype html><html><body><main><h1>Real Daemon Smoke Edited</h1><p>Edited in place by a follow-up daemon run.</p></main></body></html>',
+    }),
+  });
+  if (!response.ok) {
+    throw new Error('fake artifact edit write failed: HTTP ' + response.status + ' ' + (await response.text()).slice(0, 500));
+  }
+  emitSuccess('Updated real-daemon-smoke.html in place with a deterministic follow-up edit.', false, false);
+  process.exitCode = 0;
+  exitSoon(0);
+}
+
+function projectIdFromPrompt(promptText = '') {
+  const marker = '.od/projects/';
+  const idx = promptText.indexOf(marker);
+  if (idx === -1) return '';
+  return promptText
+    .slice(idx + marker.length)
+    .split(/[\\s/]/)[0]
+    .replace(/[^a-zA-Z0-9_-].*$/, '');
+}
+
+function projectDir(promptText = '') {
+  const marker = 'current working directory: \`';
+  const idx = promptText.toLowerCase().indexOf(marker);
+  const fromPrompt = idx === -1
+    ? ''
+    : promptText.slice(idx + marker.length).split('\`')[0] || '';
+  const fromEnv = process.env.OD_DATA_DIR && process.env.OD_PROJECT_ID
+    ? join(process.env.OD_DATA_DIR, 'projects', process.env.OD_PROJECT_ID)
+    : '';
+  const cwdFlagIndex = args.indexOf('-C');
+  const fromArgs = cwdFlagIndex >= 0 && typeof args[cwdFlagIndex + 1] === 'string'
+    ? args[cwdFlagIndex + 1]
+    : '';
+  return process.env.OD_PROJECT_DIR || fromEnv || fromArgs || fromPrompt || process.cwd();
 }
 
 function writeJson(value) {
@@ -175,6 +358,32 @@ function writeJson(value) {
 
 function exitSoon(code) {
   setTimeout(() => process.exit(code), 10);
+}
+
+// Emit a Claude stream-json turn that carries a TodoWrite tool_use snapshot and
+// a chosen terminal stop_reason. The turn ends cleanly (exit 0 -> succeeded), but
+// its declared work is left in whatever state the todos describe — the fixture the
+// #1247 / #1060 completeness tests drive. Only the claude runtime models a
+// content-level tool_use + per-turn stop_reason, so these fixtures use it.
+function emitClaudeTodoRun(todos, stopReason) {
+  if (agentId !== 'claude') {
+    throw new Error('emitClaudeTodoRun fixtures require the claude fake runtime, got ' + agentId);
+  }
+  writeJson({ type: 'system', subtype: 'init', model: 'fake-claude', session_id: 'fake-session' });
+  writeJson({
+    type: 'assistant',
+    message: {
+      id: 'msg-1',
+      stop_reason: stopReason,
+      content: [
+        { type: 'tool_use', id: 'tw-1', name: 'TodoWrite', input: { todos } },
+        { type: 'text', text: 'Here is the plan.' },
+      ],
+    },
+  });
+  writeJson({ type: 'result', usage: { input_tokens: 1, output_tokens: 1 }, total_cost_usd: 0, duration_ms: 1, stop_reason: stopReason });
+  process.exitCode = 0;
+  exitSoon(0);
 }
 
 function emitSuccess(artifact, isChunked, includeThinking) {
@@ -333,6 +542,82 @@ function emitFailure() {
       process.exitCode = 1;
       exitSoon(1);
   }
+}
+
+function emitServiceFailure(statusCode) {
+  const message =
+    statusCode === 429
+      ? 'HTTP 429 Too Many Requests: rate limit exceeded for the current provider.'
+      : 'HTTP 503 Service Unavailable: upstream model provider is temporarily unavailable.';
+  switch (agentId) {
+    case 'codex':
+      writeJson({ type: 'thread.started' });
+      writeJson({ type: 'turn.started' });
+      writeJson({ type: 'turn.failed', error: { message } });
+      process.exitCode = 0;
+      exitSoon(0);
+      return;
+    case 'opencode':
+      writeJson({ type: 'error', error: { data: { message } } });
+      process.exitCode = 0;
+      exitSoon(0);
+      return;
+    default:
+      process.stderr.write(message + '\\n');
+      process.exitCode = 1;
+      exitSoon(1);
+  }
+}
+
+// Reproduces a connection that dropped mid-response. This shape is NOT guessed:
+// it was captured by pointing the real Claude Code CLI (2.1.168) at a fake
+// Anthropic endpoint that accepts the request, starts streaming, then destroys
+// the TCP socket. The real CLI exhausts its internal retries and then, on
+// STDOUT (not stderr), emits the SDK error as a synthetic assistant text block
+// plus a result frame carrying is_error:true with subtype "success", and exits
+// 1. The daemon's claude diagnostic reads the stdout tail and classifies it as
+// a retryable connection drop.
+//
+// Only claude is modeled here: the daemon connection-drop diagnostic is
+// claude-specific, and the real Codex CLI fails this class differently (it
+// streams "Reconnecting... N/5" and a turn.failed event over its own
+// transport), so a faithful Codex case belongs with Codex-specific handling,
+// not this claude reproduction.
+function emitSocketDropFailure() {
+  const sdkError =
+    'API Error: The socket connection was closed unexpectedly. For more information, pass \`verbose: true\` in the second argument to fetch()';
+  if (agentId === 'claude') {
+    writeJson({ type: 'system', subtype: 'init', model: 'fake-claude', session_id: 'fake-session' });
+    writeJson({
+      type: 'assistant',
+      message: {
+        id: 'msg-1',
+        model: '<synthetic>',
+        role: 'assistant',
+        stop_reason: 'stop_sequence',
+        content: [{ type: 'text', text: sdkError }],
+      },
+      error: 'unknown',
+    });
+    writeJson({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result: sdkError,
+      stop_reason: 'stop_sequence',
+      duration_ms: 1,
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    });
+    process.exitCode = 1;
+    exitSoon(1);
+    return;
+  }
+  // Other runtimes are not the subject of the claude connection diagnostic;
+  // surface a generic non-zero exit carrying the same SDK error text.
+  process.stderr.write(sdkError + '\\n');
+  process.exitCode = 1;
+  exitSoon(1);
 }
 
 function emitEmptySuccess() {

@@ -235,6 +235,51 @@ describe('deploy file set', () => {
     expect(files.map((f) => f.file)).toEqual(['index.html']);
   });
 
+  it('can include all visible project files while keeping the selected entry at index.html', async () => {
+    const { projectsRoot, projectId, dir } = await setupProject();
+    await mkdir(path.join(dir, 'screens'), { recursive: true });
+    await writeFile(path.join(dir, 'index.html'), '<!doctype html><h1>Launcher</h1>');
+    await writeFile(path.join(dir, 'index-v1.html'), '<!doctype html><h1>V1</h1>');
+    await writeFile(path.join(dir, 'screens', 'k1-waiting.html'), '<!doctype html><h1>K1</h1>');
+    await writeFile(path.join(dir, 'index-v1.html.artifact.json'), '{}');
+
+    const files = await buildDeployFileSet(projectsRoot, projectId, 'index-v1.html', {
+      includeProjectFiles: true,
+    });
+    const index = files.find((item) => item.file === 'index.html');
+
+    expect(files.map((f) => f.file).sort()).toEqual([
+      'index-v1.html',
+      'index.html',
+      'screens/k1-waiting.html',
+    ]);
+    expect(index?.sourcePath).toBe('index-v1.html');
+    expect(index?.data.toString('utf8')).toContain('V1');
+  });
+
+  it('does not publish unreferenced files from linked-folder projects', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'od-deploy-linked-test-'));
+    const projectsRoot = path.join(root, 'projects');
+    const linkedDir = path.join(root, 'linked');
+    const projectId = 'linked-p1';
+    const metadata = { baseDir: linkedDir };
+    await mkdir(path.join(linkedDir, 'src'), { recursive: true });
+    await writeFile(path.join(linkedDir, 'index.html'), '<!doctype html><link rel="stylesheet" href="style.css"><h1>Linked</h1>');
+    await writeFile(path.join(linkedDir, 'style.css'), 'body { color: black; }');
+    await writeFile(path.join(linkedDir, 'README.md'), '# Private notes');
+    await writeFile(path.join(linkedDir, 'src', 'app.ts'), 'export const secret = true;');
+
+    const files = await buildDeployFileSet(projectsRoot, projectId, 'index.html', {
+      metadata,
+      includeProjectFiles: true,
+    });
+
+    expect(files.map((f) => f.file).sort()).toEqual([
+      'index.html',
+      'style.css',
+    ]);
+  });
+
   it('injects a closeable deploy hook script from cdn when configured', async () => {
     const { projectsRoot, projectId, dir } = await setupProject();
     await writeFile(path.join(dir, 'page.html'), '<!doctype html><body><h1>Hello</h1></body>');
@@ -702,6 +747,26 @@ describe('deploy plan and analyzer', () => {
       '<h1>hi</h1>';
     const { warnings } = analyzeDeployPlan({ entryPath: 'index.html', html, files: [] });
     expect(warnings.map((w: any) => w.code)).not.toContain('no-doctype');
+  });
+
+  it('checks the doctype prolog without catastrophic backtracking on a comment-only entry', () => {
+    // Regression: the prolog check's comment-run group used a lazy `[\s\S]*?`
+    // body inside `(?:...)*`, so a comment-only entry with no doctype forced
+    // 2^n backtracking — a ~250-byte HTML could hang the single-threaded
+    // daemon for minutes (event-loop DoS on POST /deploy/preflight). The
+    // tempered comment body makes each comment match deterministically.
+    const html = '<!---->'.repeat(28) + '<html><body></body></html>';
+    const start = performance.now();
+    const { warnings } = analyzeDeployPlan({ entryPath: 'index.html', html, files: [] });
+    const elapsedMs = performance.now() - start;
+    // Correctness is preserved (no doctype -> still flagged) and the check is
+    // linear: the tempered regex handles this in well under 1ms, whereas the
+    // old lazy-body regex grew ~2x per added comment (seconds here, minutes
+    // with a few more). The 500ms budget sits far above the fixed path (~100x
+    // headroom, no false failures) yet well below the vulnerable time, so any
+    // regression blows it.
+    expect(warnings.map((w) => w.code)).toContain('no-doctype');
+    expect(elapsedMs).toBeLessThan(500);
   });
 
   it('flags external scripts and stylesheets', () => {

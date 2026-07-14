@@ -7,11 +7,34 @@
 import { defineCollection, z } from 'astro:content';
 import { glob } from 'astro/loaders';
 
+const localizedContentSchema = z
+  .record(
+    z.string(),
+    z
+      .object({
+        name: z.string().optional(),
+        title: z.string().optional(),
+        description: z.string().optional(),
+        summary: z.string().optional(),
+        category: z.string().optional(),
+        tagline: z.string().optional(),
+        atmosphere: z.string().optional(),
+        body: z.string().optional(),
+        bodyHtml: z.string().optional(),
+        triggers: z.array(z.string()).optional(),
+        examplePrompt: z.string().optional(),
+        example_prompt: z.string().optional(),
+      })
+      .passthrough(),
+  )
+  .optional();
+
 const skillSchema = z
   .object({
     name: z.string().optional(),
     description: z.string().optional(),
     triggers: z.array(z.string()).optional(),
+    i18n: localizedContentSchema,
     od: z
       .object({
         mode: z.string().optional(),
@@ -49,11 +72,17 @@ const designTemplates = defineCollection({
 // human-meaningful fields (H1, `> Category:`, palette hex codes) at
 // page-render time.
 const systems = defineCollection({
+  // `DESIGN.md` is the English source; `DESIGN.<locale>.md` (e.g.
+  // `DESIGN.zh.md`) are optional localized bodies for a curated subset of
+  // popular brands. The catalog reads only the English entries (so cards
+  // aren't duplicated); the detail page prefers the locale entry and falls
+  // back to English. Astro strips the final `.md`, so ids are `<slug>/DESIGN`
+  // or `<slug>/DESIGN.<locale>`.
   loader: glob({
     base: '../../design-systems',
-    pattern: '*/DESIGN.md',
+    pattern: '*/DESIGN*.md',
   }),
-  schema: z.object({}).passthrough(),
+  schema: z.object({ i18n: localizedContentSchema }).passthrough(),
 });
 
 const craft = defineCollection({
@@ -61,7 +90,7 @@ const craft = defineCollection({
     base: '../../craft',
     pattern: '*.md',
   }),
-  schema: z.object({}).passthrough(),
+  schema: z.object({ i18n: localizedContentSchema }).passthrough(),
 });
 
 // `templates/live-artifacts/<slug>/README.md` — legacy Live Artifact bundles.
@@ -73,7 +102,7 @@ const templates = defineCollection({
     base: '../../templates/live-artifacts',
     pattern: '*/README.md',
   }),
-  schema: z.object({}).passthrough(),
+  schema: z.object({ i18n: localizedContentSchema }).passthrough(),
 });
 
 // Blog posts live in `app/content/blog/*.md`. Each post must declare a typed
@@ -87,13 +116,55 @@ const blog = defineCollection({
     pattern: ['*.md', '!_*.md'],
     base: './app/content/blog',
   }),
-  schema: z.object({
-    title: z.string(),
-    date: z.coerce.date(),
-    category: z.enum(['Product', 'Guides', 'Use cases', 'Community']),
-    readingTime: z.number().int().positive(),
-    summary: z.string(),
-  }),
+  schema: z
+    .object({
+      title: z.string(),
+      date: z.coerce.date(),
+      category: z.enum(['Product', 'Guides', 'Use cases', 'Community']),
+      readingTime: z.number().int().positive(),
+      summary: z.string(),
+      author: z.string().optional(),
+      socialImage: z.string().optional(),
+      ctaKind: z.enum(['download-app', 'event-register']).optional(),
+      ctaHref: z.string().url().optional(),
+      ctaTitle: z.string().min(1).optional(),
+      ctaBody: z.string().min(1).optional(),
+      ctaLabel: z.string().min(1).optional(),
+      i18n: z
+        .record(
+          z.string(),
+          z
+            .object({
+              title: z.string().optional(),
+              summary: z.string().optional(),
+              category: z.string().optional(),
+              body: z.string().optional(),
+              bodyHtml: z.string().optional(),
+              // Optional per-locale reading time. Set this when a localized
+              // `bodyHtml` differs in length from the English Markdown (e.g. a
+              // translation that hasn't caught up to an expanded English body)
+              // so non-English readers see an accurate estimate instead of the
+              // shared English `readingTime`.
+              readingTime: z.number().int().positive().optional(),
+            })
+            .passthrough(),
+        )
+        .optional(),
+    })
+    .superRefine((data, ctx) => {
+      if (data.ctaKind !== 'event-register') return;
+
+      for (const field of ['ctaHref', 'ctaTitle', 'ctaBody', 'ctaLabel'] as const) {
+        if (!data[field]) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [field],
+            message: `${field} is required when ctaKind is event-register`,
+          });
+        }
+      }
+    })
+    .passthrough(),
 });
 
 // Tutorials live in `app/content/tutorials/*.md`. Each entry maps to a
@@ -106,14 +177,15 @@ const tutorials = defineCollection({
   }),
   schema: z.object({
     title: z.string(),
-    youtubeId: z.string().regex(/^[\w-]{11}$/, 'youtubeId must be 11 chars'),
+    youtubeId: z.string().regex(/^[\w-]{11}$/, 'youtubeId must be 11 chars').optional(),
     summary: z.string(),
     date: z.coerce.date(),
     category: z.enum(['Getting started', 'Tutorial', 'Demo', 'Review', 'Community']),
-    durationSeconds: z.number().int().positive(),
+    durationSeconds: z.number().int().positive().optional(),
     author: z.string(),
+    publicFormat: z.enum(['video', 'article']).default('video'),
     official: z.boolean().default(false),
-    thumbnail: z.string().url().optional(),
+    thumbnail: z.string().optional(),
   }),
 });
 

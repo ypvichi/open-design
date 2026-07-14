@@ -1,5 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { ConnectorConnectResponse, ConnectorDetail, ConnectorStatusResponse } from '@open-design/contracts';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { Button, Textarea } from '@open-design/components';
+import type {
+  ConnectorConnectResponse,
+  ConnectorDetail,
+  ConnectorStatusResponse,
+  DesignSystemSummary,
+  LibraryAsset,
+} from '@open-design/contracts';
 import { streamViaDaemon } from '../providers/daemon';
 import {
   connectConnector,
@@ -9,11 +16,14 @@ import {
   fetchDesignSystemGenerationJob,
   fetchDesignSystem,
   fetchConnectorStatuses,
+  fetchLibraryAssetAsFile,
   fetchProjectFileText,
   fetchProjectFiles,
   fetchProjectDesignSystemPackageAudit,
   fetchDesignSystemRevisions,
+  importProjectFigma,
   openFolderDialog,
+  startDesignSystemTokenContractRebuildJob,
   updateDesignSystemRevisionStatus,
   updateDesignSystemDraft,
   uploadProjectFile,
@@ -21,6 +31,7 @@ import {
 } from '../providers/registry';
 import {
   createConversation,
+  getProject,
   listConversations,
   listMessages,
   loadTabs,
@@ -30,12 +41,20 @@ import {
   saveTabs,
 } from '../state/projects';
 import { appendErrorStatusEvent } from '../runtime/chat-events';
+import { parseDesignMd } from '../runtime/design-md-parse';
 import {
   buildDesignSystemPackageAuditRepairPrompt,
   summarizeDesignSystemPackageAudit,
 } from '../runtime/design-system-package-audit';
 import { deriveFileOps } from '../runtime/file-ops';
 import { latestTodosFromEvents } from '../runtime/todos';
+import { brandFaviconUrl } from '../runtime/brand-references';
+import { useBrandExtract } from '../runtime/useBrandExtract';
+import {
+  createFileSystemReadError,
+  FILE_SYSTEM_READ_ERROR_MESSAGE,
+  isFileSystemReadError,
+} from '../utils/fileSystemErrors';
 import { randomUUID } from '../utils/uuid';
 import type {
   AgentEvent,
@@ -54,30 +73,111 @@ import type {
   ProjectFile,
   ProjectMetadata,
 } from '../types';
+import { takeDesignSystemAssetSeed } from '../state/libraryHandoff';
 import { decideAutoOpenAfterWrite } from './auto-open-file';
 import { ChatPane } from './ChatPane';
+import { DesignSystemAssetDropzone } from './DesignSystemAssetDropzone';
+import { BrandPickerModal } from './BrandPickerModal';
+import { DesignSystemCreateHero } from './DesignSystemCreateHero';
+import { DesignSystemPicker } from './DesignSystemPicker';
+import { LibraryPicker } from './LibraryPicker';
+import { notifyConnectorsChanged } from './connectors-events';
+import { connectorAuthSnapshotChanged } from './connectors-state';
 import { FileWorkspace } from './FileWorkspace';
 import { Icon, type IconName } from './Icon';
+import { Spinner } from './Loading';
+import { Toast } from './Toast';
 import { useAnalytics } from '../analytics/provider';
-import { trackPageView } from '../analytics/events';
+import {
+  trackDesignSystemCreateResult,
+  trackDesignSystemReviewResult,
+  trackDesignSystemsCreateClick,
+  trackDesignSystemsPresetBrandPickerClick,
+  trackDesignSystemsPresetBrandPickerSurfaceView,
+  trackDesignSystemSourceIngestResult,
+  trackDesignSystemStatusResult,
+  trackFileUploadResult,
+  trackPageView,
+} from '../analytics/events';
 import {
   clearOnboardingSessionId,
   peekOnboardingSessionId,
 } from '../analytics/onboarding-session';
+import { consumeDesignSystemCreateEntry } from '../analytics/ds-create-entry';
+import { deriveUploadCohort } from '../analytics/upload-tracking';
+import {
+  designSystemFolderCountBucket,
+  designSystemLengthBucket,
+  designSystemModuleSlug,
+  designSystemModuleType,
+  designSystemRepoHostFromUrl,
+  designSystemTotalSizeBucket,
+} from '@open-design/contracts/analytics';
 import type {
+  DesignSystemsCreateClickProps,
+  TrackingDesignSystemCreateEntryFrom,
+  TrackingDesignSystemIngestMethod,
+  TrackingDesignSystemIngestSourceType,
+  TrackingDesignSystemOrigin,
+  TrackingDesignSystemRepoHost,
+  TrackingDesignSystemSourceIngestEntryFrom,
+  TrackingDesignSystemSourceIngestResult,
   TrackingDesignSystemStatus,
+  TrackingDesignSystemStatusAction,
+  TrackingDesignSystemStatusValue,
   TrackingDesignSystemsEntryFrom,
 } from '@open-design/contracts/analytics';
+import { useI18n } from '../i18n';
+
+// Source counts the embedded DS creation flow can report back to its
+// wrapper at Generate-click time. OnboardingView uses this to emit the
+// `generate` ui_click + `onboarding_complete_result` events with the
+// runtime/about-you context that only it knows; without this hook the
+// onboarding wrapper would have no way to see the user-pinned source
+// material because the form state lives inside `DesignSystemCreationFlow`.
+export interface DesignSystemGenerateSnapshot {
+  sourceCount: number;
+  hasBrandDescription: boolean;
+  hasDesignMd: boolean;
+  sourceUrlCount: number;
+  githubRepoCount: number;
+  localFolderCount: number;
+  figFileCount: number;
+  assetFileCount: number;
+}
 
 interface CreationProps {
   onBack: () => void;
-  onCreated: (projectId: string, project?: Project) => void;
+  onCreated: (projectId: string, project?: Project, conversationId?: string | null) => void;
   onProjectPrepared?: (project: Project) => void;
   onSystemsRefresh?: () => Promise<void> | void;
   config?: AppConfig;
   onOpenConnectorsTab?: () => void;
   chrome?: 'standalone' | 'embedded';
+  // Intent signal: user clicked Generate. Fires before any async work,
+  // so a wrapper (OnboardingView) can emit the `generate` ui_click row
+  // even when generation later fails.
+  onBeforeGenerate?: (snapshot: DesignSystemGenerateSnapshot) => void;
+  // Outcome signal: generation either kicked off successfully (workspace
+  // opened, project handed off) or hit a failure branch. Wrappers use
+  // this to emit lifecycle completion events with the right result so
+  // a draft-create error or workspace-open error doesn't ship as
+  // `completed_with_design_system`. `error_code` is the daemon's
+  // generic failure code; the exact message stays in the local error
+  // toast.
+  onGenerateSettled?: (
+    snapshot: DesignSystemGenerateSnapshot,
+    outcome: { result: 'success' } | { result: 'failed'; errorCode: string },
+  ) => void;
+  designSystems?: DesignSystemSummary[];
 }
+
+const SOURCE_PROCESSING_MIN_VISIBLE_MS = 900;
+const SOURCE_PROCESSING_LOADING_FILE_COUNT = 24;
+const SOURCE_PROCESSING_LOADING_BYTES = 4 * 1024 * 1024;
+const SOURCE_FILE_DIALOG_FOCUS_DELAY_MS = 120;
+const SOURCE_FILE_DIALOG_WARMUP_MS = 450;
+const SOURCE_FILE_DIALOG_STALE_MS = 30_000;
 
 interface DetailProps {
   id: string;
@@ -89,15 +189,27 @@ interface DetailProps {
   onSetDefault: (id: string) => void;
   onSystemsRefresh?: () => Promise<void> | void;
   onProjectsRefresh?: () => Promise<void> | void;
+  initialRevisionJob?: DesignSystemGenerationJob | null;
+  onInitialRevisionJobConsumed?: (jobId: string) => void;
 }
 
 type SetupStep = 'setup' | 'confirm';
 type ReviewTab = 'system' | 'files';
+type DesignMdMode = 'edit' | 'preview';
+type DesignMdPreviewTheme = 'light' | 'dark';
+
+interface ResolvedDesignSystemWorkspaceProject {
+  projectId: string;
+  files: ProjectFile[];
+}
 
 interface SetupState {
   company: string;
-  githubUrl: string;
-  githubUrls: string[];
+  designMd: string;
+  sourceUrl: string;
+  sourceUrls: string[];
+  figmaUrl: string;
+  figmaUrls: string[];
   codeFiles: string[];
   codeFolders: string[];
   codeFileObjects: File[];
@@ -110,8 +222,11 @@ interface SetupState {
 
 const EMPTY_SETUP: SetupState = {
   company: '',
-  githubUrl: '',
-  githubUrls: [],
+  designMd: '',
+  sourceUrl: '',
+  sourceUrls: [],
+  figmaUrl: '',
+  figmaUrls: [],
   codeFiles: [],
   codeFolders: [],
   codeFileObjects: [],
@@ -127,13 +242,11 @@ const GITHUB_CONNECTOR_ID = 'github';
 const CONNECTOR_CALLBACK_MESSAGE_TYPE = 'open-design:connector-connected';
 const GITHUB_CONNECTOR_STATUS_TIMEOUT_MS = 5000;
 const LOCAL_CODE_UPLOAD_ROOT = 'context/local-code';
-const FIGMA_CONTEXT_ROOT = 'context/figma';
 const ASSET_UPLOAD_ROOT = 'assets';
 const SOURCE_CONTEXT_MANIFEST_PATH = 'context/source-context.md';
 const MAX_LOCAL_CODE_UPLOAD_FILES = 120;
 const MAX_LOCAL_CODE_FILE_BYTES = 1024 * 1024;
 const MAX_FIGMA_CONTEXT_FILES = 10;
-const MAX_FIGMA_PARSE_BYTES = 512 * 1024;
 const MAX_ASSET_UPLOAD_FILES = 80;
 const MAX_ASSET_FILE_BYTES = 12 * 1024 * 1024;
 
@@ -183,6 +296,26 @@ function readRememberedGenerationJob(designSystemId: string): string | null {
   }
 }
 
+async function resolveDesignSystemWorkspaceProject(
+  system: Pick<DesignSystemDetail, 'id' | 'projectId'>,
+): Promise<ResolvedDesignSystemWorkspaceProject | null> {
+  const workspace = await ensureDesignSystemWorkspace(system.id);
+  if (workspace) {
+    return {
+      projectId: workspace.project.id,
+      files: workspace.files,
+    };
+  }
+  if (!system.projectId) return null;
+  const fallbackProject = await getProject(system.projectId);
+  if (!fallbackProject) return null;
+  const files = await fetchProjectFiles(system.projectId);
+  return {
+    projectId: system.projectId,
+    files,
+  };
+}
+
 function clearRememberedGenerationJob(designSystemId: string): void {
   try {
     window.sessionStorage.removeItem(generationJobStorageKey(designSystemId));
@@ -199,11 +332,45 @@ export function DesignSystemCreationFlow({
   config,
   onOpenConnectorsTab,
   chrome = 'standalone',
+  onBeforeGenerate,
+  onGenerateSettled,
+  designSystems = [],
 }: CreationProps) {
+  const { t } = useI18n();
   const [step, setStep] = useState<SetupStep>('setup');
-  const [state, setState] = useState<SetupState>(EMPTY_SETUP);
+  // A Library "create design system from selection" hand-off pre-fills the
+  // source material with the chosen assets (single-shot; cleared on read).
+  const [state, setState] = useState<SetupState>(() => {
+    const seed = takeDesignSystemAssetSeed();
+    if (!seed || seed.files.length === 0) return EMPTY_SETUP;
+    return {
+      ...EMPTY_SETUP,
+      assetFiles: seed.files.map((file) => file.name),
+      assetFileObjects: seed.files,
+    };
+  });
   const [error, setError] = useState<string | null>(null);
+  const [errorToast, setErrorToast] = useState<{ id: number; message: string } | null>(null);
+  const errorToastIdRef = useRef(0);
   const [generationStarting, setGenerationStarting] = useState(false);
+  const [sourceProcessingCount, setSourceProcessingCount] = useState(0);
+  const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
+  const [designMdMode, setDesignMdMode] = useState<DesignMdMode>('edit');
+  const [designMdPreviewTheme, setDesignMdPreviewTheme] = useState<DesignMdPreviewTheme>('light');
+  const [referenceDesignSystemId, setReferenceDesignSystemId] = useState<string | null>(null);
+  const [referenceDesignSystemLoading, setReferenceDesignSystemLoading] = useState(false);
+  const [referenceDesignSystemError, setReferenceDesignSystemError] = useState<string | null>(null);
+  const referenceDesignSystemRequestRef = useRef(0);
+  const manualDesignMdRef = useRef(state.designMd);
+  // "Start from a brand" reference picker on the URL field + the Advanced
+  // disclosure that hides the lower-frequency source inputs.
+  const [brandPickerOpen, setBrandPickerOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // Two-phase brand/design-system extraction kickoff (POST /api/brands):
+  // the daemon creates the project + real transcript immediately, then the
+  // programmatic pass registers a usable user:<id> design system in the
+  // background.
+  const brandExtract = useBrandExtract();
   const composioConfigured = isComposioConfigured(config?.composio);
   const [githubConnector, setGithubConnector] = useState<ConnectorDetail | null>(null);
   const [githubConnectorLoading, setGithubConnectorLoading] = useState(false);
@@ -213,31 +380,112 @@ export function DesignSystemCreationFlow({
   const [githubAuthorizationUrl, setGithubAuthorizationUrl] = useState<string | null>(null);
   const githubConnectorRefreshId = useRef(0);
   const githubConnectorRequestInFlight = useRef(false);
+  const githubConnectorRef = useRef<ConnectorDetail | null>(null);
+  const githubConnectorLoadedRef = useRef(false);
   const embedded = chrome === 'embedded';
+
+  function setVisibleError(message: string | null) {
+    setError(message);
+    if (!message) {
+      setErrorToast(null);
+      return;
+    }
+    setErrorToast({
+      id: (errorToastIdRef.current += 1),
+      message,
+    });
+  }
 
   // DS create page_view (v2 doc). Only fires for the standalone
   // /design-systems/create route — the embedded variant lives inside
   // OnboardingView, which owns the `area=design_system` step page_view.
   const analytics = useAnalytics();
   const creationPageViewFiredRef = useRef(false);
+  // Resolved create entry source. Consumed once from the pending hint set by
+  // the navigate() call site (§3.1); falls back to the onboarding-session /
+  // design_systems_page heuristic for direct URL loads. Reused by
+  // create_result so the funnel "entry → success" lines up.
+  const createEntryFromRef = useRef<TrackingDesignSystemCreateEntryFrom | null>(null);
   useEffect(() => {
     if (embedded) return;
     if (creationPageViewFiredRef.current) return;
     creationPageViewFiredRef.current = true;
     const onboardingSessionId = peekOnboardingSessionId();
+    const resolvedEntry: TrackingDesignSystemCreateEntryFrom =
+      consumeDesignSystemCreateEntry() ??
+      (onboardingSessionId ? 'onboarding' : 'design_systems_page');
+    createEntryFromRef.current = resolvedEntry;
     trackPageView(analytics.track, {
       page_name: 'design_systems',
       area: 'design_system_create',
       view_type: 'page',
-      entry_from: onboardingSessionId ? 'onboarding' : 'design_systems_page',
+      entry_from: resolvedEntry,
     });
   }, [analytics.track, embedded]);
+
+  // Preset-brand picker impression — fires each time the modal opens from the
+  // standalone create form. Gated on `embedded` to mirror the create page_view
+  // / clicks (onboarding owns its own area).
+  useEffect(() => {
+    if (embedded) return;
+    if (!brandPickerOpen) return;
+    trackDesignSystemsPresetBrandPickerSurfaceView(analytics.track, {
+      page_name: 'design_systems',
+      area: 'preset_brand_picker',
+    });
+  }, [brandPickerOpen, embedded, analytics.track]);
+
+  // `emitDsFileUpload` reports the user-side dropzone batch. `picked`
+  // is the raw FileList; `staged` is what survived the size/count
+  // filters (selectLocalCodeFiles / selectFigmaFiles / selectAssetFiles).
+  // The result is `failed` only when zero files pass the filter (e.g.
+  // every dropped file was over the per-source size cap); cohort math
+  // mirrors the chat-composer + onboarding uploads via
+  // `deriveUploadCohort`. The onboarding variant of this event lives
+  // in EntryShell; this fires from the standalone /design-systems/create
+  // route so the dashboard gets both flows.
+  function emitDsFileUpload(
+    sourceType: 'local_code' | 'fig' | 'assets',
+    picked: File[],
+    staged: File[],
+  ) {
+    if (embedded) return;
+    if (picked.length === 0) return;
+    const cohort = deriveUploadCohort(picked);
+    trackFileUploadResult(analytics.track, {
+      page_name: 'design_systems',
+      area: 'design_system_source',
+      source_type: sourceType,
+      ...cohort,
+      result: staged.length > 0 ? 'success' : 'failed',
+      error_code: staged.length === 0 ? 'DS_UPLOAD_ALL_FILTERED' : undefined,
+    });
+  }
+
+  // Form-level intent clicks on the standalone create form. The embedded
+  // onboarding variant is excluded — EntryShell owns its own
+  // area=design_system clicks (same gating as the DS create page_view
+  // and emitDsFileUpload above).
+  function emitCreateFormClick(
+    element: DesignSystemsCreateClickProps['element'],
+    methodsExpanded?: boolean,
+  ) {
+    if (embedded) return;
+    trackDesignSystemsCreateClick(analytics.track, {
+      page_name: 'design_systems',
+      area: 'design_system_create',
+      element,
+      ...(methodsExpanded === undefined ? {} : { methods_expanded: methodsExpanded }),
+    });
+  }
 
   const refreshGithubConnector = useCallback(async () => {
     if (!composioConfigured) {
       githubConnectorRefreshId.current += 1;
       githubConnectorRequestInFlight.current = false;
       setGithubConnector(null);
+      githubConnectorRef.current = null;
+      githubConnectorLoadedRef.current = false;
       setGithubConnectorLoading(false);
       setGithubConnectorError(null);
       setGithubAuthorizationPending(false);
@@ -252,7 +500,13 @@ export function DesignSystemCreationFlow({
     try {
       const { connector, timedOut } = await fetchGithubConnectorStatusWithTimeout();
       if (githubConnectorRefreshId.current !== refreshId) return;
+      const statusChanged =
+        githubConnectorLoadedRef.current &&
+        connectorAuthSnapshotChanged(githubConnectorRef.current, connector);
       setGithubConnector(connector);
+      githubConnectorRef.current = connector;
+      githubConnectorLoadedRef.current = true;
+      if (statusChanged) notifyConnectorsChanged();
       if (connector?.status === 'connected') {
         setGithubAuthorizationPending(false);
         setGithubAuthorizationUrl(null);
@@ -283,6 +537,32 @@ export function DesignSystemCreationFlow({
     void refreshGithubConnector();
   }, [refreshGithubConnector]);
 
+  // Without this, a `.fig` (or any file) dropped anywhere on the create page
+  // OUTSIDE the small drop zones makes the browser navigate to / open the
+  // file, losing the form — the "can't drag the .fig in" symptom. Mirror
+  // FileWorkspace's window-level guard: swallow file drags that don't land on
+  // a real drop target so misses do nothing instead of opening the file.
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+    const isAllowedDropTarget = (target: EventTarget | null) =>
+      target instanceof Element && Boolean(target.closest('.ds-drop-zone, [data-testid="ds-asset-dropzone"]'));
+    const onDragOver = (e: DragEvent) => {
+      if (!hasFiles(e) || isAllowedDropTarget(e.target)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e) || isAllowedDropTarget(e.target)) return;
+      e.preventDefault();
+    };
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
+
   useEffect(() => {
     if (!composioConfigured) return undefined;
     function handleConnectorMessage(event: MessageEvent) {
@@ -310,10 +590,15 @@ export function DesignSystemCreationFlow({
     try {
       const result = await connectConnector(GITHUB_CONNECTOR_ID);
       if (result.error) setGithubConnectorError(result.error);
-      if (result.connector) setGithubConnector(result.connector);
+      if (result.connector) {
+        setGithubConnector(result.connector);
+        githubConnectorRef.current = result.connector;
+        githubConnectorLoadedRef.current = true;
+      }
       if (result.auth?.redirectUrl) setGithubAuthorizationUrl(result.auth.redirectUrl);
       if (isPendingConnectorAuth(result.auth)) setGithubAuthorizationPending(true);
       if (result.auth?.kind === 'connected' || result.connector?.status === 'connected') {
+        notifyConnectorsChanged();
         setGithubConnectorError(null);
         setGithubAuthorizationPending(false);
         setGithubAuthorizationUrl(null);
@@ -331,7 +616,11 @@ export function DesignSystemCreationFlow({
     setGithubConnectorError(null);
     try {
       const connector = await disconnectConnector(GITHUB_CONNECTOR_ID);
+      const statusChanged = connector != null && connectorAuthSnapshotChanged(githubConnectorRef.current, connector);
       setGithubConnector(connector);
+      githubConnectorRef.current = connector;
+      githubConnectorLoadedRef.current = true;
+      if (statusChanged) notifyConnectorsChanged();
       setGithubAuthorizationPending(false);
       setGithubAuthorizationUrl(null);
     } catch (err) {
@@ -341,24 +630,129 @@ export function DesignSystemCreationFlow({
     }
   }
 
-  function handleAddGithubUrl() {
-    const nextUrl = normalizeGithubUrl(state.githubUrl);
+  function handleAddSourceUrl() {
+    const nextUrl = normalizeSourceUrl(state.sourceUrl);
     if (!nextUrl) return;
+    emitCreateFormClick('source_url_add');
     setState((curr) => ({
       ...curr,
-      githubUrl: '',
-      githubUrls: Array.from(new Set([...curr.githubUrls, nextUrl])),
+      sourceUrl: '',
+      sourceUrls: Array.from(new Set([...curr.sourceUrls, nextUrl])),
     }));
   }
 
-  function handleRemoveGithubUrl(url: string) {
+  function handleSourceUrlKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (isImeComposing(event)) return;
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    handleAddSourceUrl();
+  }
+
+  function handleReferenceDesignSystemChange(id: string | null) {
+    const requestId = ++referenceDesignSystemRequestRef.current;
+    setReferenceDesignSystemId(id);
+    setReferenceDesignSystemError(null);
+
+    if (id == null) {
+      setReferenceDesignSystemLoading(false);
+      setDesignMdMode('edit');
+      setState((curr) => ({ ...curr, designMd: manualDesignMdRef.current }));
+      return;
+    }
+
+    setReferenceDesignSystemLoading(true);
+    void fetchDesignSystem(id)
+      .then((detail) => {
+        if (referenceDesignSystemRequestRef.current !== requestId) return;
+        if (!detail) {
+          setReferenceDesignSystemError(t('dsCreate.referenceLoadFailed'));
+          return;
+        }
+        setState((curr) => ({ ...curr, designMd: detail.body }));
+        setDesignMdMode('edit');
+        setDesignMdPreviewTheme('light');
+      })
+      .catch((err) => {
+        if (referenceDesignSystemRequestRef.current !== requestId) return;
+        setReferenceDesignSystemError(
+          err instanceof Error ? err.message : t('dsCreate.referenceLoadFailed'),
+        );
+      })
+      .finally(() => {
+        if (referenceDesignSystemRequestRef.current !== requestId) return;
+        setReferenceDesignSystemLoading(false);
+      });
+  }
+
+  function handleRemoveSourceUrl(url: string) {
     setState((curr) => ({
       ...curr,
-      githubUrls: curr.githubUrls.filter((item) => item !== url),
+      sourceUrls: curr.sourceUrls.filter((item) => item !== url),
     }));
+  }
+
+  // "Start from a brand" — picking a brand from the reference gallery just
+  // fills the website field with its domain; the user then hits Generate to
+  // extract. (It is a reference entry, not an immediate extraction kickoff.)
+  function handlePickBrandReference(domain: string) {
+    const nextUrl = normalizeSourceUrl(`https://${domain}`);
+    if (!nextUrl) return;
+    setVisibleError(null);
+    setBrandPickerOpen(false);
+    emitCreateFormClick('source_url_add');
+    setState((curr) => ({
+      ...curr,
+      sourceUrl: '',
+      sourceUrls: Array.from(new Set([...curr.sourceUrls, nextUrl])),
+    }));
+  }
+
+  function handleAddFigmaUrl() {
+    const nextUrl = normalizeFigmaUrl(state.figmaUrl);
+    if (!nextUrl) {
+      setVisibleError('Enter a Figma file URL (https://figma.com/file/… or /design/…).');
+      return;
+    }
+    setVisibleError(null);
+    emitCreateFormClick('figma_url_add');
+    setState((curr) => ({
+      ...curr,
+      figmaUrl: '',
+      figmaUrls: Array.from(new Set([...curr.figmaUrls, nextUrl])),
+    }));
+  }
+
+  function handleFigmaUrlKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (isImeComposing(event)) return;
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    handleAddFigmaUrl();
+  }
+
+  function handleRemoveFigmaUrl(url: string) {
+    setState((curr) => ({
+      ...curr,
+      figmaUrls: curr.figmaUrls.filter((item) => item !== url),
+    }));
+  }
+
+  function handleDesignMdInput(value: string) {
+    manualDesignMdRef.current = value;
+    setState((curr) => ({ ...curr, designMd: value }));
+  }
+
+  function beginSourceProcessing() {
+    setSourceProcessingCount((count) => count + 1);
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      setSourceProcessingCount((count) => Math.max(0, count - 1));
+    };
   }
 
   async function handlePickCodeFolder() {
+    emitCreateFormClick('browse_folder');
     const selected = await openFolderDialog();
     if (!selected) return;
     setState((curr) => ({
@@ -375,50 +769,228 @@ export function DesignSystemCreationFlow({
     }));
   }
 
+  function handleRemoveAssetFile(target: File) {
+    setState((curr) => {
+      const nextObjects = curr.assetFileObjects.filter((file) => file !== target);
+      return {
+        ...curr,
+        assetFileObjects: nextObjects,
+        assetFiles: nextObjects.map((file) => resourceRelativePath(file)),
+      };
+    });
+  }
+
+  // Filter + dedupe raw files into the staged asset state, keeping the parallel
+  // `assetFiles` (names) and `assetFileObjects` arrays perfectly in lockstep.
+  // Returns the subset that actually survived the size/count filter.
+  function mergeAssetFiles(rawFiles: File[]): File[] {
+    const stagedFiles = selectAssetFiles(rawFiles);
+    if (stagedFiles.length === 0) return stagedFiles;
+    setVisibleError(null);
+    setState((curr) => {
+      const nextObjects = dedupeResourceFiles([...curr.assetFileObjects, ...stagedFiles]);
+      return {
+        ...curr,
+        assetFileObjects: nextObjects,
+        assetFiles: nextObjects.map((file) => resourceRelativePath(file)),
+      };
+    });
+    return stagedFiles;
+  }
+
+  // Click + paste land here as a flat File[]; drops route through the
+  // directory-aware reader first (see handleAssetDrop).
+  function handleAssetUpload(rawFiles: File[]) {
+    const staged = mergeAssetFiles(rawFiles);
+    emitDsFileUpload('assets', rawFiles, staged);
+  }
+
+  async function handleAssetDrop(dataTransfer: DataTransfer) {
+    setVisibleError(null);
+    const finish = beginSourceProcessing();
+    try {
+      const dropped = await filesFromDataTransfer(dataTransfer);
+      const staged = mergeAssetFiles(dropped);
+      emitDsFileUpload('assets', dropped, staged);
+    } catch (dropError) {
+      if (!isFileSystemReadError(dropError)) throw dropError;
+      setVisibleError(FILE_SYSTEM_READ_ERROR_MESSAGE);
+    } finally {
+      finish();
+    }
+  }
+
+  // "Select from library": fetch each chosen OD Library asset's bytes into a
+  // browser File and stage it like any other asset, so generation uploads them
+  // through the same path. No project exists yet at setup time, so we seed File
+  // objects (fetchLibraryAssetAsFile) rather than apply-into-project.
+  async function addAssetsFromLibrary(assets: LibraryAsset[]) {
+    if (assets.length === 0) return;
+    const finish = beginSourceProcessing();
+    try {
+      const fetched = await Promise.all(assets.map((asset) => fetchLibraryAssetAsFile(asset)));
+      const files = fetched.filter((file): file is File => file !== null);
+      mergeAssetFiles(files);
+      if (files.length < assets.length) {
+        setVisibleError(`Added ${files.length} of ${assets.length} item(s) from the library.`);
+      }
+    } finally {
+      finish();
+    }
+  }
+
   async function generate() {
     if (generationStarting) return;
+    // Snapshot the user-pinned source state up front. Used for the
+    // pre-async ui_click intent signal AND the post-async lifecycle
+    // outcome — both rides need the same numbers so the
+    // dashboard can correlate "user attempted generate with N
+    // sources" → "generate eventually succeeded / failed with the
+    // same N". Computed here because OnboardingView can't peek into
+    // this flow's setup form.
+    const sourceUrls = sourceUrlsFromState(state);
+    const githubUrls = githubUrlsFromState(state);
+    const sourceUrlCount = sourceUrls.length;
+    const githubRepoCount = githubUrls.length;
+    const localFolderCount = state.codeFolders?.length ?? 0;
+    const figFileCount = (state.figFiles?.length ?? 0) + figmaUrlsFromState(state).length;
+    const assetFileCount = state.assetFiles?.length ?? 0;
+    const hasDesignMd = Boolean(state.designMd.trim());
+    const snapshot = {
+      sourceCount:
+        sourceUrlCount + localFolderCount + figFileCount + assetFileCount + (hasDesignMd ? 1 : 0),
+      hasBrandDescription: Boolean(state.company?.trim()),
+      hasDesignMd,
+      sourceUrlCount,
+      githubRepoCount,
+      localFolderCount,
+      figFileCount,
+      assetFileCount,
+    };
+    onBeforeGenerate?.(snapshot);
     setGenerationStarting(true);
-    setError(null);
+    setVisibleError(null);
+    const generateStartedAt = performance.now();
+    const onboardingSessionId = peekOnboardingSessionId();
+    const createEntryFrom: TrackingDesignSystemCreateEntryFrom = embedded
+      ? 'onboarding'
+      : (createEntryFromRef.current ??
+        (onboardingSessionId ? 'onboarding' : 'design_systems_page'));
+    const ingestEntryFrom: TrackingDesignSystemSourceIngestEntryFrom = embedded
+      ? 'onboarding'
+      : onboardingSessionId
+        ? 'onboarding'
+        : 'design_systems_page';
+    const designSystemOrigin = deriveDesignSystemOrigin(snapshot);
+    const designSystemOrigins = deriveDesignSystemOrigins(snapshot);
+    function emitCreateResult(
+      result: 'success' | 'failed' | 'cancelled',
+      designSystemId: string | undefined,
+      errorCode: string | undefined,
+      projectId: string | undefined,
+    ) {
+      trackDesignSystemCreateResult(analytics.track, {
+        page_name: 'design_systems',
+        area: 'design_system_create',
+        entry_from: createEntryFrom,
+        result,
+        design_system_id: designSystemId,
+        project_id: projectId,
+        design_system_source: designSystemOrigin,
+        ...(designSystemOrigins ? { ds_source_origins: designSystemOrigins } : {}),
+        source_count: snapshot.sourceCount,
+        created_as_project: result === 'success',
+        has_brand_description: snapshot.hasBrandDescription,
+        brand_description_length_bucket: designSystemLengthBucket(state.company),
+        notes_length_bucket: designSystemLengthBucket(state.notes),
+        error_code: errorCode,
+        duration_ms: Math.max(0, Math.round(performance.now() - generateStartedAt)),
+      });
+    }
     try {
-      const title = inferDesignSystemTitle(state);
-      const created = await createDesignSystemDraft({
-        title,
-        summary: state.company,
-        category: 'Custom',
-        surface: 'web',
-        status: 'draft',
-        artifactMode: 'agent-managed',
-        sourceNotes: buildSourceNotes(state),
-        provenance: buildProvenance(state),
+      // Two-phase extraction. The website link (a real site, not a GitHub repo)
+      // drives the kickoff. POST /api/brands creates the backing project and
+      // real transcript immediately, then the programmatic pass registers a
+      // usable user:<id> design system in the background.
+      const extractUrl =
+        nonGithubSourceUrlsFromState(state)[0] ?? sourceUrlsFromState(state)[0] ?? '';
+      const fallbackDesignMd = !extractUrl && !hasDesignMd
+        ? buildFallbackDesignMdFromState(state)
+        : '';
+      const designMdForExtraction = hasDesignMd ? state.designMd : fallbackDesignMd;
+      if (!extractUrl && !designMdForExtraction) {
+        setVisibleError(t('dsCreate.missingSourceError'));
+        setStep('setup');
+        emitCreateResult('failed', undefined, 'DS_EXTRACT_NO_SOURCE', undefined);
+        onGenerateSettled?.(snapshot, { result: 'failed', errorCode: 'DS_EXTRACT_NO_SOURCE' });
+        return;
+      }
+      const result = await brandExtract.run(extractUrl, {
+        description: [state.company.trim(), state.notes.trim()].filter(Boolean).join('\n\n'),
+        designMd: designMdForExtraction,
+        throwOnError: true,
       });
-      if (!created) {
-        setError('Could not generate this design system.');
+      if (!result) {
+        setVisibleError('Extraction is already starting. Please wait for the current request to finish.');
         setStep('setup');
+        emitCreateResult('failed', undefined, 'DS_EXTRACT_START_FAILED', undefined);
+        onGenerateSettled?.(snapshot, { result: 'failed', errorCode: 'DS_EXTRACT_START_FAILED' });
         return;
       }
-      const workspace = await ensureDesignSystemWorkspace(created.id);
-      if (!workspace) {
-        setError('Could not open the design system workspace.');
-        setStep('setup');
-        return;
-      }
-      const project = workspace.project;
-      const setupState = state;
-      const connector = githubConnector;
-      onCreated(project.id, project);
-      scheduleAfterProjectHandoff(() => {
-        void prepareCreatedDesignSystemProject({
+      // The backing project was just created daemon-side and is not in the local
+      // `projects` list yet — hydrate it so onCreated can prepend it before
+      // navigating into the live extraction.
+      const project = (await getProject(result.projectId).catch(() => undefined)) ?? undefined;
+      let projectForCreated = project && result.designSystemId
+        ? {
+            ...project,
+            designSystemId: project.designSystemId ?? result.designSystemId,
+            metadata: {
+              ...(project.metadata ?? {}),
+              kind: 'brand' as const,
+              importedFrom: 'brand-extraction' as const,
+              brandId: result.id,
+              brandSourceUrl: result.sourceUrl,
+              brandDesignSystemId: result.designSystemId,
+            } satisfies ProjectMetadata,
+          }
+        : project;
+      if (project && hasProjectStagingSources(state)) {
+        await prepareCreatedDesignSystemProject({
           project,
-          state: setupState,
+          state,
           composioConfigured,
-          githubConnector: connector,
-          onProjectPrepared,
+          githubConnector,
+          onProjectPrepared: (preparedProject) => {
+            projectForCreated = preparedProject;
+            onProjectPrepared?.(preparedProject);
+          },
           onSystemsRefresh,
+          analyticsTrack: analytics.track,
+          ingestEntryFrom,
+          designSystemId: result.designSystemId ?? project.designSystemId ?? `user:${result.id}`,
         });
-      });
+      }
+      if (result.designSystemId && result.status === 'ready') {
+        try {
+          await onSystemsRefresh?.();
+        } catch {
+          // The project is still usable; the picker can refresh again from the destination.
+        }
+      } else {
+        void onSystemsRefresh?.();
+      }
+      onCreated(result.projectId, projectForCreated, result.conversationId);
+      emitCreateResult('success', result.designSystemId, undefined, result.projectId);
+      onGenerateSettled?.(snapshot, { result: 'success' });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not prepare the design system project.');
+      setVisibleError(err instanceof Error ? err.message : 'Could not prepare the design system project.');
       setStep('setup');
+      const errorCode = err instanceof Error
+        ? `DS_GENERATE_THREW:${err.message.slice(0, 80)}`
+        : 'DS_GENERATE_THREW';
+      emitCreateResult('failed', undefined, errorCode, undefined);
+      onGenerateSettled?.(snapshot, { result: 'failed', errorCode });
     } finally {
       setGenerationStarting(false);
     }
@@ -428,22 +1000,21 @@ export function DesignSystemCreationFlow({
     return (
       <div className="ds-setup-shell ds-setup-shell--center">
         <div className="ds-setup-center-card">
-          <h1>It will take about 5 minutes to generate your design system.</h1>
-          <p>You can step away. Keep the tab open in the background.</p>
+          <h1>Open Design will extract your design system.</h1>
+          <p>You'll land in a project that fills in live — logo, palette, typography, imagery — as it measures your brand. Keep the tab open.</p>
           <div className="ds-setup-actions">
-            <button type="button" className="ghost" onClick={() => setStep('setup')}>
+            <Button variant="ghost" onClick={() => setStep('setup')}>
               <Icon name="arrow-left" />
               Back
-            </button>
-            <button
-              type="button"
-              className="primary"
+            </Button>
+            <Button
+              variant="primary"
               disabled={generationStarting}
               onClick={() => void generate()}
             >
               <Icon name="sparkles" />
-              {generationStarting ? 'Opening project...' : 'Generate'}
-            </button>
+              {generationStarting ? 'Starting extraction...' : 'Extract design system'}
+            </Button>
           </div>
         </div>
       </div>
@@ -451,188 +1022,594 @@ export function DesignSystemCreationFlow({
   }
 
   return (
-    <div className={`ds-setup-shell${embedded ? ' ds-setup-shell--embedded' : ''}`}>
+    <div
+      className={`ds-setup-shell${embedded ? ' ds-setup-shell--embedded' : ''}`}
+    >
+      {errorToast ? (
+        <Toast
+          key={errorToast.id}
+          message={errorToast.message}
+          tone="error"
+          role="alert"
+          placement="top"
+          ttlMs={6000}
+          onDismiss={() => setErrorToast(null)}
+        />
+      ) : null}
+      {sourceProcessingCount > 0 ? (
+        <div
+          className="ds-source-upload-loading"
+          role="status"
+          aria-live="polite"
+          data-testid="ds-source-upload-loading"
+        >
+          <div className="ds-source-upload-loading__card">
+            <Spinner size={18} />
+            <span>Adding source material...</span>
+          </div>
+        </div>
+      ) : null}
       {embedded ? null : (
         <header className="ds-setup-topbar">
-          <button type="button" className="ghost" onClick={onBack}>
-            <Icon name="arrow-left" />
-            Back
-          </button>
+          <div className="ds-setup-topbar-left">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                emitCreateFormClick('back');
+                onBack();
+              }}
+            >
+              <Icon name="arrow-left" />
+              Back
+            </Button>
+          </div>
           <span className="ds-setup-mark">
             <Icon name="blocks" />
           </span>
-          <button
-            type="button"
-            className="primary"
-            disabled={!state.company.trim()}
+          <Button
+            variant="primary"
+            disabled={!hasCreationSource(state)}
             onClick={() => {
-              if (!state.company.trim()) {
-                setError('Tell Open Design about the company or design system first.');
-                return;
-              }
-              setStep('confirm');
+              emitCreateFormClick('continue_to_generation');
+              void generate();
             }}
           >
-            Continue to generation
+            {t('dsCreate.continueToGeneration')}
             <Icon name="chevron-right" />
-          </button>
+          </Button>
         </header>
       )}
 
       <main className="ds-setup-form">
-        <h1>Generate from your material</h1>
-        <p>Start with a short description, then add any source files you already have.</p>
+        {embedded ? (
+          <>
+            <h1>{t('dsCreate.embeddedTitle')}</h1>
+            <p>{t('dsCreate.embeddedBody')}</p>
+          </>
+        ) : (
+          <aside className="ds-setup-hero-col">
+            <DesignSystemCreateHero stacked />
+          </aside>
+        )}
 
-        <label className="ds-setup-field">
-          <span>Describe your brand or product</span>
-          <textarea
-            rows={4}
-            value={state.company}
-            onChange={(event) => setState((curr) => ({ ...curr, company: event.target.value }))}
-            placeholder="e.g. Mission Impastabowl: fast-casual pasta restaurant with in-store touchscreen kiosk, mobile app and website"
-          />
-        </label>
-
+        <div className="ds-setup-form-col">
         <section className="ds-resource-section">
-          <h2>Add source material <span>(optional)</span></h2>
-          <p>Use anything that shows your current style.</p>
+          <h2>{t('dsCreate.sourceSectionTitle')}</h2>
+          <p>{t('dsCreate.sourceSectionBody')}</p>
           <div className="ds-resource-card">
             <div className="ds-resource-row">
-              <strong>GitHub repo</strong>
+              <strong>{t('dsCreate.githubWebsiteLabel')}</strong>
               <div className="ds-resource-inline">
                 <input
-                  value={state.githubUrl}
-                  onChange={(event) => setState((curr) => ({ ...curr, githubUrl: event.target.value }))}
-                  placeholder="https://github.com/owner/repo"
+                  value={state.sourceUrl}
+                  onChange={(event) => setState((curr) => ({ ...curr, sourceUrl: event.target.value }))}
+                  onKeyDown={handleSourceUrlKeyDown}
+                  placeholder="https://github.com/org/repo"
                 />
                 <button
                   type="button"
                   className="ghost"
-                  disabled={!state.githubUrl.trim()}
-                  onClick={handleAddGithubUrl}
+                  disabled={!state.sourceUrl.trim()}
+                  onClick={handleAddSourceUrl}
                 >
-                  Add
+                  {t('dsCreate.add')}
+                </button>
+                <button
+                  type="button"
+                  className="ghost ds-brand-start-btn"
+                  aria-haspopup="dialog"
+                  aria-expanded={brandPickerOpen}
+                  onClick={() => {
+                    emitCreateFormClick('start_from_brand');
+                    setBrandPickerOpen(true);
+                  }}
+                >
+                  <Icon name="sparkles" />
+                  {t('dsCreate.startFromBrand')}
                 </button>
               </div>
-              {state.githubUrls.length > 0 ? (
-                <div className="ds-github-url-list" aria-label="Added GitHub repositories">
-                  {state.githubUrls.map((url) => (
-                    <span key={url}>
-                      <Icon name="github" />
-                      {githubRepoLabel(url)}
-                      <button
-                        type="button"
-                        aria-label={`Remove ${githubRepoLabel(url)}`}
-                        onClick={() => handleRemoveGithubUrl(url)}
-                      >
-                        x
-                      </button>
-                    </span>
-                  ))}
+              <BrandPickerModal
+                open={brandPickerOpen}
+                onClose={() => setBrandPickerOpen(false)}
+                onPick={(brand) => {
+                  if (!embedded) {
+                    trackDesignSystemsPresetBrandPickerClick(analytics.track, {
+                      page_name: 'design_systems',
+                      area: 'preset_brand_picker',
+                      element: 'brand_pick',
+                      preset_brand_category: brand.category,
+                    });
+                  }
+                  handlePickBrandReference(brand.domain);
+                }}
+                title={t('dsCreate.startFromBrand')}
+                subtitle={t('dsCreate.brandPickerSubtitle')}
+                actionLabel={t('dsCreate.add')}
+                quickPicksLabel={t('dsCreate.brandPickerQuickPicks')}
+              />
+              {state.sourceUrls.length > 0 ? (
+                <div className="ds-source-link-list" aria-label={t('dsCreate.addedSourceLinks')}>
+                  {state.sourceUrls.map((url) => {
+                    const label = sourceUrlLabel(url);
+                    const href = sourceUrlHref(url);
+                    return (
+                      <span className="ds-source-link-chip" key={url}>
+                        {href ? (
+                          <a
+                            className="ds-source-link-open"
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            aria-label={t('dsCreate.openSourceLabel', { label })}
+                            title={t('dsCreate.openSourceLabel', { label })}
+                          >
+                            <SourceLinkFavicon url={url} />
+                            <span className="ds-source-link-label">{label}</span>
+                          </a>
+                        ) : (
+                          <span className="ds-source-link-open ds-source-link-open--static" title={label}>
+                            <SourceLinkFavicon url={url} />
+                            <span className="ds-source-link-label">{label}</span>
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          className="ds-source-link-remove"
+                          aria-label={t('dsCreate.removeSourceLabel', { label })}
+                          onClick={() => handleRemoveSourceUrl(url)}
+                        >
+                          x
+                        </button>
+                      </span>
+                    );
+                  })}
                 </div>
               ) : null}
-              <GitHubRepositoryAccessPanel
-                composioConfigured={composioConfigured}
-                connector={githubConnector}
-                loading={githubConnectorLoading}
-                action={githubConnectorAction}
-                authorizationPending={githubAuthorizationPending}
-                authorizationUrl={githubAuthorizationUrl}
-                error={githubConnectorError}
-                onOpenConnectorsTab={onOpenConnectorsTab}
-                onConnect={() => void handleConnectGithub()}
-                onOpenAuthorization={() => openConnectorAuthorizationUrl(githubAuthorizationUrl)}
-                onDisconnect={() => void handleDisconnectGithub()}
+            </div>
+            <div className="ds-resource-row ds-resource-row--assets">
+              <strong>{t('dsCreate.addFiles')}</strong>
+              <DesignSystemAssetDropzone
+                files={state.assetFileObjects}
+                onAddFiles={handleAssetUpload}
+                onDrop={(dataTransfer) => void handleAssetDrop(dataTransfer)}
+                onRemove={handleRemoveAssetFile}
+                onSelectFromLibrary={() => {
+                  emitCreateFormClick('add_assets');
+                  setLibraryPickerOpen(true);
+                }}
               />
             </div>
-            <DropZone
-              label="Link local code"
-              helper="Use a folder or selected files from this computer."
-              prompt="Drag a folder here or browse"
-              names={localCodeSourceLabels(state)}
-              directory
-              onBrowseFolder={() => void handlePickCodeFolder()}
-              onRemoveName={handleRemoveCodeFolder}
-              onFiles={(_names, files) => {
-                const stagedFiles = selectLocalCodeFiles(files);
-                const stagedNames = stagedFiles.map((file) => localCodeRelativePath(file));
-                setState((curr) => ({
-                  ...curr,
-                  codeFiles: Array.from(new Set([...curr.codeFiles, ...stagedNames])),
-                  codeFileObjects: dedupeLocalCodeFiles([...curr.codeFileObjects, ...stagedFiles]),
-                }));
-              }}
-            />
-            <DropZone
-              label="Upload .fig"
-              helper="Parsed locally; only a summary is added."
-              prompt="Drop .fig here or browse"
-              accept=".fig"
-              names={state.figFiles}
-              onFiles={(_names, files) => {
-                const stagedFiles = selectFigmaFiles(files);
-                const stagedNames = stagedFiles.map((file) => resourceRelativePath(file));
-                setState((curr) => ({
-                  ...curr,
-                  figFiles: Array.from(new Set([...curr.figFiles, ...stagedNames])),
-                  figFileObjects: dedupeResourceFiles([...curr.figFileObjects, ...stagedFiles]),
-                }));
-              }}
-            />
-            <DropZone
-              label="Add assets"
-              prompt="Drag files here or browse"
-              names={state.assetFiles}
-              onFiles={(_names, files) => {
-                const stagedFiles = selectAssetFiles(files);
-                const stagedNames = stagedFiles.map((file) => resourceRelativePath(file));
-                setState((curr) => ({
-                  ...curr,
-                  assetFiles: Array.from(new Set([...curr.assetFiles, ...stagedNames])),
-                  assetFileObjects: dedupeResourceFiles([...curr.assetFileObjects, ...stagedFiles]),
-                }));
-              }}
-            />
+            <div className="ds-resource-row ds-resource-row--description">
+              <strong>{t('dsCreate.describeBrand')} <span>{t('dsCreate.optional')}</span></strong>
+              <label className="ds-resource-description">
+                <span>{t('dsCreate.describeBrandHelp')}</span>
+                <textarea
+                  rows={3}
+                  value={state.company}
+                  onChange={(event) => setState((curr) => ({ ...curr, company: event.target.value }))}
+                  placeholder={t('dsCreate.companyPlaceholder')}
+                />
+              </label>
+            </div>
+            <div className="ds-resource-row ds-resource-row--design-md">
+              <strong>{t('dsCreate.pasteDesignMd')} <span>{t('dsCreate.optional')}</span></strong>
+              <div className="ds-design-md-field">
+                <div className="ds-design-md-field-head">
+                  <span>
+                    {t('dsCreate.pasteDesignMdHelp')}
+                    <a
+                      href="https://github.com/VoltAgent/awesome-design-md/"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="ds-design-md-reference-link"
+                    >
+                      {t('dsCreate.reference')}
+                      <Icon name="external-link" size={12} />
+                    </a>
+                  </span>
+                  <div className="ds-design-md-actions" aria-label={t('dsCreate.designMdViewMode')}>
+                    <button
+                      type="button"
+                      className={designMdMode === 'edit' ? 'active' : ''}
+                      aria-pressed={designMdMode === 'edit'}
+                      onClick={() => setDesignMdMode('edit')}
+                    >
+                      {t('common.edit')}
+                    </button>
+                    <button
+                      type="button"
+                      className={designMdMode === 'preview' ? 'active' : ''}
+                      aria-pressed={designMdMode === 'preview'}
+                      disabled={!state.designMd.trim()}
+                      onClick={() => setDesignMdMode('preview')}
+                    >
+                      {t('common.preview')}
+                    </button>
+                  </div>
+                </div>
+                {designSystems.length > 0 ? (
+                  <div className="ds-design-md-reference-picker">
+                    <span>{t('dsCreate.referenceLabel')}</span>
+                    <DesignSystemPicker
+                      designSystems={designSystems}
+                      selectedId={referenceDesignSystemId}
+                      onChange={handleReferenceDesignSystemChange}
+                      showCreateAction={false}
+                    />
+                    {referenceDesignSystemLoading ? (
+                      <span className="ds-design-md-reference-status">
+                        {t('dsCreate.referenceLoading')}
+                      </span>
+                    ) : null}
+                    {referenceDesignSystemError ? (
+                      <span className="ds-design-md-reference-status is-error">
+                        {referenceDesignSystemError}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {designMdMode === 'preview' && state.designMd.trim() ? (
+                  <DesignMdComponentKitPreview
+                    markdown={state.designMd}
+                    theme={designMdPreviewTheme}
+                    onThemeChange={setDesignMdPreviewTheme}
+                  />
+                ) : (
+                  <textarea
+                    rows={5}
+                    value={state.designMd}
+                    onChange={(event) => handleDesignMdInput(event.target.value)}
+                    placeholder={'---\nname: Heritage\ncolors:\n  primary: "#1A1C1E"\n  tertiary: "#B8422E"\ntypography:\n  h1:\n    fontFamily: Public Sans\n---\n\n## Overview\n...'}
+                  />
+                )}
+              </div>
+            </div>
+            <div className="ds-resource-advanced">
+              <button
+                type="button"
+                className="ghost ds-resource-advanced-toggle"
+                aria-expanded={advancedOpen}
+                onClick={() => setAdvancedOpen((open) => !open)}
+              >
+                <Icon name={advancedOpen ? 'chevron-down' : 'chevron-right'} />
+                {t('dsCreate.advancedToggle')}
+              </button>
+              <div className={`accordion-collapsible${advancedOpen ? ' open' : ''}`}>
+                <div className="accordion-collapsible-inner">
+                  <div className="ds-resource-row">
+                    <strong>{t('dsCreate.githubRepo')}</strong>
+                    <GitHubRepositoryAccessPanel
+                      composioConfigured={composioConfigured}
+                      connector={githubConnector}
+                      loading={githubConnectorLoading}
+                      action={githubConnectorAction}
+                      authorizationPending={githubAuthorizationPending}
+                      authorizationUrl={githubAuthorizationUrl}
+                      error={githubConnectorError}
+                      onOpenConnectorsTab={onOpenConnectorsTab}
+                      onToggleMethods={(expanded) => emitCreateFormClick('show_access_methods', expanded)}
+                      onConnect={() => void handleConnectGithub()}
+                      onOpenAuthorization={() => openConnectorAuthorizationUrl(githubAuthorizationUrl)}
+                      onDisconnect={() => void handleDisconnectGithub()}
+                    />
+                  </div>
+                  <DropZone
+                    label={t('dsCreate.localCodeLabel')}
+                    helper={t('dsCreate.localCodeHelper')}
+                    prompt={t('dsCreate.localCodePrompt')}
+                    names={localCodeSourceLabels(state)}
+                    directory
+                    onZoneClick={() => emitCreateFormClick('browse_folder')}
+                    onBrowseFolder={() => void handlePickCodeFolder()}
+                    onRemoveName={handleRemoveCodeFolder}
+                    onError={setVisibleError}
+                    onProcessingStart={beginSourceProcessing}
+                    onFiles={(_names, files) => {
+                      const stagedFiles = selectLocalCodeFiles(files);
+                      const stagedNames = stagedFiles.map((file) => localCodeRelativePath(file));
+                      emitDsFileUpload('local_code', files, stagedFiles);
+                      setState((curr) => ({
+                        ...curr,
+                        codeFiles: Array.from(new Set([...curr.codeFiles, ...stagedNames])),
+                        codeFileObjects: dedupeLocalCodeFiles([...curr.codeFileObjects, ...stagedFiles]),
+                      }));
+                    }}
+                  />
+                  <DropZone
+                    label={t('dsCreate.uploadFigLabel')}
+                    helper={t('dsCreate.uploadFigHelper')}
+                    prompt={t('dsCreate.uploadFigPrompt')}
+                    accept=".fig"
+                    names={state.figFiles}
+                    onZoneClick={() => emitCreateFormClick('upload_fig')}
+                    onError={setVisibleError}
+                    onProcessingStart={beginSourceProcessing}
+                    onFiles={(_names, files) => {
+                      const stagedFiles = selectFigmaFiles(files);
+                      const stagedNames = stagedFiles.map((file) => resourceRelativePath(file));
+                      emitDsFileUpload('fig', files, stagedFiles);
+                      setState((curr) => ({
+                        ...curr,
+                        figFiles: Array.from(new Set([...curr.figFiles, ...stagedNames])),
+                        figFileObjects: dedupeResourceFiles([...curr.figFileObjects, ...stagedFiles]),
+                      }));
+                    }}
+                  />
+                  <div className="ds-resource-row">
+                    <strong>{t('dsCreate.figmaUrl')}</strong>
+                    <div className="ds-resource-inline">
+                      <input
+                        value={state.figmaUrl}
+                        onChange={(event) => setState((curr) => ({ ...curr, figmaUrl: event.target.value }))}
+                        onKeyDown={handleFigmaUrlKeyDown}
+                        placeholder={t('dsCreate.figmaPlaceholder')}
+                      />
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={!state.figmaUrl.trim()}
+                        onClick={handleAddFigmaUrl}
+                      >
+                        {t('dsCreate.add')}
+                      </button>
+                    </div>
+                    {state.figmaUrls.length > 0 ? (
+                      <div className="ds-source-link-list" aria-label={t('dsCreate.addedFigmaUrls')}>
+                        {state.figmaUrls.map((url) => (
+                          <span className="ds-source-link-chip" key={url}>
+                            <a
+                              className="ds-source-link-open"
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              aria-label={t('dsCreate.openSourceLabel', { label: figmaUrlLabel(url) })}
+                              title={t('dsCreate.openSourceLabel', { label: figmaUrlLabel(url) })}
+                            >
+                              <span className="ds-source-link-favicon ds-source-link-favicon--glyph" aria-hidden>
+                                <Icon name="import" size={14} />
+                              </span>
+                              <span className="ds-source-link-label">{figmaUrlLabel(url)}</span>
+                            </a>
+                            <button
+                              type="button"
+                              className="ds-source-link-remove"
+                              aria-label={t('dsCreate.removeSourceLabel', { label: figmaUrlLabel(url) })}
+                              onClick={() => handleRemoveFigmaUrl(url)}
+                            >
+                              x
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <p>{t('dsCreate.savedFigmaHelp')}</p>
+                  </div>
+                  {embedded ? null : (
+                    <label className="ds-setup-field">
+                      <span>{t('dsCreate.notes')}</span>
+                      <Textarea
+                        rows={4}
+                        value={state.notes}
+                        onChange={(event) => setState((curr) => ({ ...curr, notes: event.target.value }))}
+                        placeholder={t('dsCreate.notesPlaceholder')}
+                      />
+                    </label>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
-        {embedded ? null : (
-          <label className="ds-setup-field">
-            <span>Notes</span>
-            <textarea
-              rows={4}
-              value={state.notes}
-              onChange={(event) => setState((curr) => ({ ...curr, notes: event.target.value }))}
-              placeholder="e.g. We use a warm, earthy color palette with rounded corners. Our brand voice is playful but professional..."
-            />
-          </label>
-        )}
         {error ? <div className="ds-editor-error">{error}</div> : null}
         {embedded ? (
           <div className="ds-setup-actions ds-setup-actions--embedded">
-            <button type="button" className="ghost" onClick={onBack}>
-              <Icon name="arrow-left" />
-              Back
-            </button>
-            <button
-              type="button"
-              className="primary"
-              disabled={!state.company.trim()}
+            <Button
+              variant="ghost"
               onClick={() => {
-                if (!state.company.trim()) {
-                  setError('Tell Open Design about the company or design system first.');
-                  return;
-                }
-                setStep('confirm');
+                emitCreateFormClick('back');
+                onBack();
               }}
             >
-              Generate
+              <Icon name="arrow-left" />
+              {t('dsCreate.back')}
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!hasCreationSource(state)}
+              onClick={() => {
+                emitCreateFormClick('continue_to_generation');
+                void generate();
+              }}
+            >
+              {t('dsCreate.generate')}
               <Icon name="chevron-right" />
-            </button>
+            </Button>
           </div>
         ) : null}
+        </div>
       </main>
+      {libraryPickerOpen ? (
+        <LibraryPicker
+          title={t('dsCreate.libraryPickerTitle')}
+          confirmLabel={t('dsCreate.libraryPickerConfirm')}
+          onClose={() => setLibraryPickerOpen(false)}
+          onConfirm={addAssetsFromLibrary}
+        />
+      ) : null}
     </div>
+  );
+}
+
+interface DesignMdPreviewColor {
+  label: string;
+  hex: string;
+}
+
+interface DesignMdPreviewModel {
+  name: string;
+  description: string;
+  displayFont: string;
+  bodyFont: string;
+  radius: number;
+  fontSize: number;
+  colors: DesignMdPreviewColor[];
+  colorPrimary: string;
+  colorPrimaryBg: string;
+  colorPrimaryHover: string;
+  colorPrimaryActive: string;
+  light: DesignMdThemeTokens;
+  dark: DesignMdThemeTokens;
+}
+
+interface DesignMdThemeTokens {
+  background: string;
+  surface: string;
+  foreground: string;
+  muted: string;
+  border: string;
+}
+
+function DesignMdComponentKitPreview({
+  markdown,
+  theme,
+  onThemeChange,
+}: {
+  markdown: string;
+  theme: DesignMdPreviewTheme;
+  onThemeChange: (theme: DesignMdPreviewTheme) => void;
+}) {
+  const model = useMemo(() => buildDesignMdPreviewModel(markdown), [markdown]);
+  const themeTokens = theme === 'dark' ? model.dark : model.light;
+  const { t } = useI18n();
+  const style = {
+    '--ds-md-bg': themeTokens.background,
+    '--ds-md-surface': themeTokens.surface,
+    '--ds-md-foreground': themeTokens.foreground,
+    '--ds-md-muted': themeTokens.muted,
+    '--ds-md-border': themeTokens.border,
+    '--ds-md-primary': model.colorPrimary,
+    '--ds-md-primary-bg': model.colorPrimaryBg,
+    '--ds-md-primary-hover': model.colorPrimaryHover,
+    '--ds-md-primary-active': model.colorPrimaryActive,
+    '--ds-md-radius': `${model.radius}px`,
+    '--ds-md-display-font': model.displayFont,
+    '--ds-md-body-font': model.bodyFont,
+    '--ds-md-font-size': `${model.fontSize}px`,
+  } as CSSProperties;
+  const primaryText = readableTextColor(model.colorPrimary);
+
+  return (
+    <div className="ds-design-md-preview" style={style} data-theme={theme}>
+      <div className="ds-design-md-preview-head">
+        <strong>{t('dsCreate.designMdPreviewKicker')}</strong>
+        <span>{t('dsCreate.designMdPreviewTitle')}</span>
+      </div>
+      <div className="ds-design-md-kit">
+        <div className="ds-design-md-kit-tabs">
+          <button
+            type="button"
+            className={theme === 'light' ? 'active' : ''}
+            aria-pressed={theme === 'light'}
+            onClick={() => onThemeChange('light')}
+          >
+            {t('brandDetail.themeLight')}
+          </button>
+          <button
+            type="button"
+            className={theme === 'dark' ? 'active' : ''}
+            aria-pressed={theme === 'dark'}
+            onClick={() => onThemeChange('dark')}
+          >
+            {t('brandDetail.themeDark')}
+          </button>
+          <span>{t('dsCreate.componentKit')}</span>
+        </div>
+        <div className="ds-design-md-kit-stage">
+          <span className="ds-design-md-kit-badge">{model.name} · {t('dsCreate.defaultTheme')}</span>
+          <h3>{t('dsCreate.componentKitTitle', { name: model.name })}</h3>
+          <p>{model.description || t('dsCreate.designMdGeneratedDescription')}</p>
+          <div className="ds-design-md-specimen">
+            <section>
+              <h4>{t('dsCreate.previewButtons')}</h4>
+              <small>{t('dsCreate.previewButtonsHelp')}</small>
+              <div className="ds-design-md-button-row">
+                <button type="button" className="primary" style={{ color: primaryText }}>{t('dsCreate.buttonPrimary')}</button>
+                <button type="button">{t('common.default')}</button>
+                <button type="button" className="dashed">{t('dsCreate.buttonDashed')}</button>
+                <button type="button" className="text">{t('dsCreate.buttonText')}</button>
+                <button type="button" className="link">{t('dsCreate.buttonLink')}</button>
+              </div>
+              <div className="ds-design-md-size-row">
+                <button type="button" className="primary small" style={{ color: primaryText }}>{t('dsCreate.sizeSmall')}</button>
+                <button type="button" className="primary" style={{ color: primaryText }}>{t('dsCreate.sizeMedium')}</button>
+                <button type="button" className="primary large" style={{ color: primaryText }}>{t('dsCreate.sizeLarge')}</button>
+              </div>
+            </section>
+            <section>
+              <h4>{t('dsCreate.previewTypeScale')}</h4>
+              <small>{model.displayFont} · {model.bodyFont}</small>
+              <div className="ds-design-md-type-row">
+                <strong>Aa</strong>
+                <span>Aa</span>
+                <small>Aa</small>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+      <div className="ds-design-md-token-row" aria-label={t('dsCreate.extractedTokens')}>
+        <DesignMdTokenChip label="colorPrimary" hex={model.colorPrimary} />
+        <DesignMdTokenChip label="colorPrimaryBg" hex={model.colorPrimaryBg} />
+        <DesignMdTokenChip label="colorPrimaryHover" hex={model.colorPrimaryHover} />
+        <DesignMdTokenChip label="colorPrimaryActive" hex={model.colorPrimaryActive} />
+        <DesignMdValueChip label="fontSize" value={String(model.fontSize)} />
+        <DesignMdValueChip label="borderRadius" value={String(model.radius)} />
+      </div>
+    </div>
+  );
+}
+
+function DesignMdTokenChip({ label, hex }: { label: string; hex: string }) {
+  return (
+    <span className="ds-design-md-token-chip">
+      <i style={{ background: hex }} aria-hidden />
+      <span>
+        <strong>{label}</strong>
+        <small>{hex}</small>
+      </span>
+    </span>
+  );
+}
+
+function DesignMdValueChip({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="ds-design-md-token-chip ds-design-md-token-chip--value">
+      <i aria-hidden>{value}</i>
+      <span>
+        <strong>{label}</strong>
+      </span>
+    </span>
   );
 }
 
@@ -646,7 +1623,10 @@ export function DesignSystemDetailView({
   onSetDefault,
   onSystemsRefresh,
   onProjectsRefresh,
+  initialRevisionJob,
+  onInitialRevisionJobConsumed,
 }: DetailProps) {
+  const { locale } = useI18n();
   const [system, setSystem] = useState<DesignSystemDetail | null>(null);
   const [body, setBody] = useState('');
   const [tab, setTab] = useState<ReviewTab>('system');
@@ -657,10 +1637,12 @@ export function DesignSystemDetailView({
   const [revisionJob, setRevisionJob] = useState<DesignSystemGenerationJob | null>(null);
   const [revisions, setRevisions] = useState<DesignSystemRevision[]>([]);
   const [reviewDecisions, setReviewDecisions] = useState<Record<string, 'good' | 'work'>>({});
+  const [tokenRebuildBusy, setTokenRebuildBusy] = useState(false);
   const [feedbackSection, setFeedbackSection] = useState<string | null>(null);
   const [chatSeed, setChatSeed] = useState<{ id: string; text: string } | null>(null);
   const [workspaceProjectId, setWorkspaceProjectId] = useState<string | null>(null);
   const [workspaceProjectFiles, setWorkspaceProjectFiles] = useState<ProjectFile[]>([]);
+  const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [projectChatMessages, setProjectChatMessages] = useState<ChatMessage[]>([]);
@@ -676,6 +1658,7 @@ export function DesignSystemDetailView({
   const pendingWorkspaceFileWritesRef = useRef<Map<string, string>>(new Map());
   const workspaceTabsLoadedRef = useRef(false);
   const openedProjectRef = useRef<string | null>(null);
+  const suppressedInitialConversationProjectIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -683,6 +1666,7 @@ export function DesignSystemDetailView({
     setRevisions([]);
     setWorkspaceProjectId(null);
     setWorkspaceProjectFiles([]);
+    setWorkspaceLoadError(null);
     setConversations([]);
     setActiveConversationId(null);
     setProjectChatMessages([]);
@@ -692,6 +1676,7 @@ export function DesignSystemDetailView({
     setWorkspaceOpenRequest(null);
     openedProjectRef.current = null;
     workspaceTabsLoadedRef.current = false;
+    suppressedInitialConversationProjectIdsRef.current.clear();
     pendingWorkspaceFileWritesRef.current.clear();
     void fetchDesignSystem(id).then((detail) => {
       if (cancelled) return;
@@ -708,18 +1693,35 @@ export function DesignSystemDetailView({
   }, [id]);
 
   useEffect(() => {
-    if (!system || system.source !== 'user') return undefined;
-    const designSystemId = system.id;
+    if (!initialRevisionJob?.id) return;
+    setRevisionJob((current) =>
+      current?.id === initialRevisionJob.id ? current : initialRevisionJob,
+    );
+    if (initialRevisionJob.kind === 'token-contract-rebuild') {
+      setStatusLine('Token contract rebuild started');
+    }
+    onInitialRevisionJobConsumed?.(initialRevisionJob.id);
+  }, [initialRevisionJob, onInitialRevisionJobConsumed]);
+
+  useEffect(() => {
+    if (!system) return undefined;
+    const currentSystem = system;
     let cancelled = false;
     async function syncWorkspaceProject() {
-      const workspace = await ensureDesignSystemWorkspace(designSystemId);
-      if (cancelled || !workspace) return;
-      setWorkspaceProjectId(workspace.project.id);
-      setWorkspaceProjectFiles(workspace.files);
-      if (onOpenProject && openedProjectRef.current !== workspace.project.id) {
-        openedProjectRef.current = workspace.project.id;
+      setWorkspaceLoadError(null);
+      const resolved = await resolveDesignSystemWorkspaceProject(currentSystem);
+      if (cancelled) return;
+      if (!resolved) {
+        setWorkspaceLoadError('Could not open the design system workspace.');
+        return;
+      }
+      const projectId = resolved.projectId;
+      setWorkspaceProjectId(projectId);
+      setWorkspaceProjectFiles(resolved.files);
+      if (onOpenProject && openedProjectRef.current !== projectId) {
+        openedProjectRef.current = projectId;
         await onProjectsRefresh?.();
-        if (!cancelled) onOpenProject(workspace.project.id);
+        if (!cancelled) onOpenProject(projectId);
       }
     }
     void syncWorkspaceProject();
@@ -731,6 +1733,9 @@ export function DesignSystemDetailView({
   useEffect(() => {
     if (!workspaceProjectId) return undefined;
     const projectId = workspaceProjectId;
+    if (suppressedInitialConversationProjectIdsRef.current.delete(projectId)) {
+      return undefined;
+    }
     let cancelled = false;
     async function loadWorkspaceConversation() {
       const existing = await listConversations(projectId);
@@ -910,6 +1915,7 @@ export function DesignSystemDetailView({
         view_type: 'page',
         entry_from: entryFrom,
         design_system_id: system.id,
+        project_id: workspaceProjectId ?? undefined,
         // Origin is the DS's provenance-style source. We don't yet
         // have a precise mapping from `system.source` / provenance
         // metadata to the v2 enum, so we report `unknown` rather
@@ -937,11 +1943,12 @@ export function DesignSystemDetailView({
         view_type: 'page',
         entry_from: entryFrom,
         design_system_id: system.id,
+        project_id: workspaceProjectId ?? undefined,
         design_system_source: 'unknown',
         design_system_status: designSystemStatus,
       });
     }
-  }, [analytics.track, system?.id, generationActive, designSystemStatus, system]);
+  }, [analytics.track, system?.id, generationActive, designSystemStatus, system, workspaceProjectId]);
   const introChatMessages = useMemo(
     () => buildDesignSystemChatMessages({
       system,
@@ -985,18 +1992,80 @@ export function DesignSystemDetailView({
   }
 
   async function togglePublished(next: boolean) {
-    const updated = await savePatch({ body, status: next ? 'published' : 'draft' });
-    setStatusLine(updated ? (next ? 'Published' : 'Moved back to draft') : 'Could not update status');
+    const startedAt = performance.now();
+    const action: TrackingDesignSystemStatusAction = next ? 'publish' : 'unpublish';
+    const statusBefore = mapDsStatusToTracking(system?.status);
+    const isDefaultBefore = system?.id === selectedId;
+    let succeeded = false;
+    let errorCode: string | undefined;
+    try {
+      const updated = await savePatch({ body, status: next ? 'published' : 'draft' });
+      succeeded = Boolean(updated);
+      if (!succeeded) errorCode = 'DS_STATUS_UPDATE_RETURNED_NULL';
+      setStatusLine(updated ? (next ? 'Published' : 'Moved back to draft') : 'Could not update status');
+    } catch (err) {
+      errorCode = err instanceof Error
+        ? `DS_STATUS_UPDATE_THREW:${err.message.slice(0, 80)}`
+        : 'DS_STATUS_UPDATE_THREW';
+      throw err;
+    } finally {
+      if (system?.id) {
+        trackDesignSystemStatusResult(analytics.track, {
+          page_name: 'design_system_project',
+          area: 'design_system_status',
+          action,
+          result: succeeded ? 'success' : 'failed',
+          design_system_id: system.id,
+          project_id: workspaceProjectId ?? undefined,
+          status_before: statusBefore,
+          status_after: succeeded
+            ? next
+              ? 'published'
+              : 'draft'
+            : statusBefore,
+          is_default_before: isDefaultBefore,
+          is_default_after: isDefaultBefore,
+          error_code: errorCode,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
+      }
+    }
   }
 
-  async function ensureWorkspaceProject() {
+  function emitReviewResult(
+    section: { title: string },
+    index: number,
+    reviewAction: 'looks_good' | 'needs_work',
+  ) {
+    if (!system) return;
+    const slug = designSystemModuleSlug(section.title);
+    trackDesignSystemReviewResult(analytics.track, {
+      page_name: 'design_system_project',
+      area: 'design_system_preview',
+      review_action: reviewAction,
+      result: 'submitted',
+      design_system_id: system.id,
+      project_id: workspaceProjectId ?? '',
+      module_id: slug,
+      module_type: designSystemModuleType(slug),
+      module_index: index,
+      feedback_length_bucket: designSystemLengthBucket(null),
+      has_custom_feedback: false,
+      duration_ms: 0,
+    });
+  }
+
+  async function ensureWorkspaceProject(options?: { suppressInitialConversation?: boolean }) {
     if (!system) return workspaceProjectId;
     if (workspaceProjectId) return workspaceProjectId;
-    const workspace = await ensureDesignSystemWorkspace(system.id);
-    if (!workspace) return null;
-    setWorkspaceProjectId(workspace.project.id);
-    setWorkspaceProjectFiles(workspace.files);
-    return workspace.project.id;
+    const resolved = await resolveDesignSystemWorkspaceProject(system);
+    if (!resolved) return null;
+    if (options?.suppressInitialConversation) {
+      suppressedInitialConversationProjectIdsRef.current.add(resolved.projectId);
+    }
+    setWorkspaceProjectId(resolved.projectId);
+    setWorkspaceProjectFiles(resolved.files);
+    return resolved.projectId;
   }
 
   const refreshWorkspaceProjectFiles = useCallback(async (projectId: string) => {
@@ -1082,6 +2151,32 @@ export function DesignSystemDetailView({
       setChatError(null);
       setStatusLine(null);
       setChatSeed(null);
+      // `design_system_review_result` with `submit_revision` fires
+      // once per send that originates from a Needs-work section seed.
+      // The earlier Looks good / Needs work click emitted
+      // `result: submitted` with `review_action: looks_good|needs_work`
+      // — this is the second leg (`action=submit_revision`), recording
+      // the moment the user actually dispatched a fix request with
+      // text. Without it the funnel can't separate "user picked Needs
+      // work but never sent" from "user picked Needs work and sent a
+      // revision request".
+      if (feedbackSection && system) {
+        const slug = designSystemModuleSlug(feedbackSection);
+        trackDesignSystemReviewResult(analytics.track, {
+          page_name: 'design_system_project',
+          area: 'design_system_preview',
+          review_action: 'submit_revision',
+          result: 'submitted',
+          design_system_id: system.id,
+          project_id: projectId,
+          module_id: slug,
+          module_type: designSystemModuleType(slug),
+          module_index: 0,
+          feedback_length_bucket: designSystemLengthBucket(rawText),
+          has_custom_feedback: rawText.length > 0,
+          duration_ms: 0,
+        });
+      }
       setFeedbackSection(null);
       const startedAt = Date.now();
       const userMsg: ChatMessage = {
@@ -1145,6 +2240,16 @@ export function DesignSystemDetailView({
       pendingWorkspaceFileWritesRef.current.clear();
       setChatStreaming(true);
 
+      // DS workspace chat = the run that generates / regenerates the
+      // DESIGN.md and preview modules. Every send from this surface
+      // is a DS-variant run, so we always populate analyticsHints. The
+      // `regenerate_from_review` entry_from is reserved for revisions
+      // triggered by the Looks good / Needs work loop (which today
+      // also flows through this composer); a future split can detect
+      // a pending revision and switch entry_from accordingly.
+      const wasOnboardingHandoff =
+        Boolean(peekOnboardingSessionId())
+        || sessionStorage.getItem(`od:auto-send-first:${projectId}`) === '1';
       void streamViaDaemon({
         agentId: config.agentId,
         history: agentHistory,
@@ -1160,6 +2265,18 @@ export function DesignSystemDetailView({
         commentAttachments,
         model: selectedModel?.model ?? null,
         reasoning: selectedModel?.reasoning ?? null,
+        locale,
+        analyticsHints: {
+          entryFrom: wasOnboardingHandoff
+            ? 'onboarding_design_system'
+            : feedbackSection
+              ? 'regenerate_from_review'
+              : 'design_system_create',
+          projectKind: 'design_system',
+          designSystemRunContext: {
+            origin: 'manual_create',
+          },
+        },
         handlers: {
           onDelta: (delta) => {
             updateAssistant((message) => ({
@@ -1225,13 +2342,10 @@ export function DesignSystemDetailView({
                 );
               }
               const repairPrompt = audit ? buildDesignSystemPackageAuditRepairPrompt(audit) : null;
-              if (repairPrompt) {
-                setChatSeed({ id: `audit-${Date.now()}`, text: repairPrompt });
-              }
               if (auditSummary) {
                 setStatusLine(
                   repairPrompt
-                    ? `${auditSummary} The next repair prompt is ready in chat.`
+                    ? `${auditSummary} Review the audit details before running a repair.`
                     : `Workspace updated. ${auditSummary}`,
                 );
               } else {
@@ -1292,6 +2406,7 @@ export function DesignSystemDetailView({
       ensureWorkspaceProject,
       feedbackSection,
       introChatMessages,
+      locale,
       onProjectsRefresh,
       persistProjectMessage,
       projectChatMessages,
@@ -1313,25 +2428,29 @@ export function DesignSystemDetailView({
   }, []);
 
   const createProjectChatConversation = useCallback(() => {
-    const projectId = workspaceProjectId;
-    if (!projectId) {
-      setChatSeed({
-        id: `general-${Date.now()}`,
-        text: 'Update this design system: ',
+    void (async () => {
+      const projectId = workspaceProjectId ?? await ensureWorkspaceProject({
+        suppressInitialConversation: true,
       });
-      return;
-    }
-    void createConversation(projectId, 'Design system').then((fresh) => {
-      if (!fresh) return;
+      if (!projectId) {
+        setChatError('Could not open the design system workspace.');
+        return;
+      }
+      const fresh = await createConversation(projectId, 'Design system');
+      if (!fresh) {
+        setChatError('Could not create a design system conversation.');
+        return;
+      }
       setConversations((current) => [fresh, ...current]);
       setActiveConversationId(fresh.id);
       setProjectChatMessages([]);
+      setChatError(null);
       setChatSeed({
         id: `general-${Date.now()}`,
         text: 'Update this design system: ',
       });
-    });
-  }, [workspaceProjectId]);
+    })();
+  }, [ensureWorkspaceProject, workspaceProjectId]);
 
   async function resolveRevision(
     revision: DesignSystemRevision,
@@ -1366,12 +2485,42 @@ export function DesignSystemDetailView({
     }
   }
 
-  if (!system) {
+  async function startTokenContractRebuild(force = false) {
+    if (!system || tokenRebuildBusy) return;
+    setTokenRebuildBusy(true);
+    setStatusLine(null);
+    try {
+      const result = await startDesignSystemTokenContractRebuildJob(system.id, { force });
+      if (!result) {
+        setStatusLine('Could not start token contract rebuild');
+        return;
+      }
+      if (result.job) {
+        setRevisionJob(result.job);
+        setStatusLine('Token contract rebuild started');
+        return;
+      }
+      setStatusLine(result.decision.reason);
+    } finally {
+      setTokenRebuildBusy(false);
+    }
+  }
+
+  // This route's only job is to resolve the design system's backing project and
+  // hand off to the full project workspace (ProjectView, via onOpenProject). For
+  // the whole redirect window we render a loading animation instead of the
+  // legacy in-place review UI below, so opening a design-system project never
+  // flashes the old "Review draft design system" scaffold before the workspace
+  // mounts. Only when the workspace genuinely cannot be resolved
+  // (workspaceLoadError) do we fall through to that legacy UI as an escape hatch.
+  const redirectingToWorkspace = Boolean(onOpenProject) && !workspaceLoadError;
+  if (!system || redirectingToWorkspace) {
     return (
       <div className="ds-setup-shell ds-setup-shell--center">
-        <div className="ds-setup-center-card">
-          <h1>Loading design system...</h1>
-          <p>Opening the review workspace.</p>
+        <div className="ds-setup-center-card ds-setup-center-card--loading" role="status" aria-live="polite">
+          <Spinner size={22} />
+          <h1>{system?.title ?? 'Loading design system...'}</h1>
+          <p>Opening the workspace...</p>
         </div>
       </div>
     );
@@ -1393,6 +2542,7 @@ export function DesignSystemDetailView({
             messages={chatMessages}
             streaming={generationActive || saving || chatStreaming}
             error={chatError}
+            config={config}
             projectId={workspaceProjectId}
             projectFiles={workspaceProjectFiles}
             onEnsureProject={ensureWorkspaceProject}
@@ -1401,8 +2551,14 @@ export function DesignSystemDetailView({
             }}
             onStop={stopProjectChat}
             initialDraft={chatSeed?.text}
+            composerPlaceholder="Follow-up action: use AI extraction to refine this system. Longer run; updates land here."
             conversations={conversations}
             activeConversationId={activeConversationId}
+            // Intentionally omit `messagesConversationId`: the loader above does
+            // not retag `projectChatMessages` during a conversation switch, so
+            // trusting the live length would show the previous conversation's
+            // count for the newly active row. Fall back to the persisted
+            // `conversation.messageCount` for a stable list count instead.
             onSelectConversation={setActiveConversationId}
             onDeleteConversation={() => {}}
             onNewConversation={createProjectChatConversation}
@@ -1412,10 +2568,10 @@ export function DesignSystemDetailView({
 
       <main className="ds-review-main">
         <header className="ds-review-tabs">
-          <button type="button" className="ghost" onClick={onBack}>
+          <Button variant="ghost" onClick={onBack}>
             <Icon name="arrow-left" />
             Back
-          </button>
+          </Button>
           <div className="segmented">
             <button
               type="button"
@@ -1432,9 +2588,9 @@ export function DesignSystemDetailView({
               Design Files
             </button>
           </div>
-          <button type="button" className="ghost">
+          <Button variant="ghost">
             Share
-          </button>
+          </Button>
         </header>
 
         {tab === 'system' ? (
@@ -1445,9 +2601,11 @@ export function DesignSystemDetailView({
             <div className="ds-publish-card">
               <p>
                 {generationActive
-                  ? activeJob?.kind === 'revision'
-                    ? 'Open Design is applying your feedback. You can keep reviewing while the updated draft is prepared.'
-                    : 'Open Design is still working, but you can start giving feedback on the work so far.'
+                  ? activeJob?.kind === 'token-contract-rebuild'
+                    ? 'Open Design is preparing a token contract rebuild for review. The active contract stays unchanged until you accept it.'
+                    : activeJob?.kind === 'revision'
+                      ? 'Open Design is applying your feedback. You can keep reviewing while the updated draft is prepared.'
+                      : 'Open Design is still working, but you can start giving feedback on the work so far.'
                   : 'Open Design is ready for review. Give feedback on the work so far, then publish when it is useful for future projects.'}
               </p>
               <label>
@@ -1460,22 +2618,48 @@ export function DesignSystemDetailView({
                 Published
               </label>
               {selectedId !== system.id ? (
-                <button type="button" className="ghost compact" onClick={() => onSetDefault(system.id)}>
-                  Make default
-                </button>
+                <Button
+                  variant="ghost"
+                  className="compact"
+                  title="Preselect this design system for new chats and new projects."
+                  onClick={() => {
+                    const statusBefore = mapDsStatusToTracking(system.status);
+                    onSetDefault(system.id);
+                    trackDesignSystemStatusResult(analytics.track, {
+                      page_name: 'design_system_project',
+                      area: 'design_system_status',
+                      action: 'set_default',
+                      result: 'success',
+                      design_system_id: system.id,
+                      project_id: workspaceProjectId ?? undefined,
+                      status_before: statusBefore,
+                      status_after: statusBefore,
+                      is_default_before: false,
+                      is_default_after: true,
+                      duration_ms: 0,
+                    });
+                  }}
+                >
+                  Default for new chats
+                </Button>
               ) : null}
             </div>
-            <DesignSystemPackageCard system={system} />
+            <DesignSystemPackageCard
+              system={system}
+              busy={tokenRebuildBusy || generationActive}
+              onRebuildTokenContract={() => void startTokenContractRebuild(false)}
+              onForceRebuildTokenContract={() => void startTokenContractRebuild(true)}
+            />
             <div className="ds-warning-card">
               <Icon name="help-circle" />
               <span>
-                <strong>Missing brand fonts</strong>
-                Open Design is rendering typography with substitute web fonts.
+                <strong>Brand font files missing</strong>
+                Typography previews are using substitute web fonts until brand font files are added.
               </span>
-              <button type="button" className="ghost compact">
+              <Button variant="ghost" className="compact">
                 <Icon name="upload" />
-                Upload fonts
-              </button>
+                Add brand font files
+              </Button>
             </div>
             {statusLine ? <div className="ds-status-line">{statusLine}</div> : null}
             <WorkspaceActivityCard message={workspaceActivityMessage} active={chatStreaming} />
@@ -1513,6 +2697,7 @@ export function DesignSystemDetailView({
                             onClick={() => {
                               setReviewDecisions((curr) => ({ ...curr, [section.title]: 'good' }));
                               setStatusLine(`${section.title} marked as looks good`);
+                              emitReviewResult(section, index, 'looks_good');
                             }}
                           >
                             <Icon name="check" />
@@ -1528,6 +2713,7 @@ export function DesignSystemDetailView({
                                 id: `${section.title}-${Date.now()}`,
                                 text: `Needs work on ${section.title}: `,
                               });
+                              emitReviewResult(section, index, 'needs_work');
                             }}
                           >
                             <Icon name="comment" />
@@ -1543,16 +2729,16 @@ export function DesignSystemDetailView({
             </div>
             <label className="ds-body-editor">
               DESIGN.md
-              <textarea
+              <Textarea
                 value={body}
                 onChange={(event) => setBody(event.target.value)}
                 rows={16}
                 disabled={!editable}
               />
             </label>
-            <button type="button" className="primary" disabled={!editable || saving} onClick={() => void saveBody()}>
+            <Button variant="primary" disabled={!editable || saving} onClick={() => void saveBody()}>
               Save DESIGN.md
-            </button>
+            </Button>
             {recentRevisions.length > 0 ? <RevisionHistoryList revisions={recentRevisions} /> : null}
           </div>
         ) : (
@@ -1572,6 +2758,8 @@ export function DesignSystemDetailView({
                 tabsState={workspaceTabsState}
                 onTabsStateChange={persistWorkspaceTabsState}
               />
+            ) : workspaceLoadError ? (
+              <div className="viewer-empty">{workspaceLoadError}</div>
             ) : (
               <div className="viewer-empty">Opening the design system workspace...</div>
             )}
@@ -1659,6 +2847,9 @@ function designSystemAssistantMessage(
 ): string {
   const summary = system?.summary?.trim();
   if (generationActive) {
+    if (activeJob?.kind === 'token-contract-rebuild') {
+      return 'I am preparing a token contract rebuild for review. The active contract will stay unchanged until the revision is accepted.';
+    }
     if (activeJob?.kind === 'revision') {
       return 'I am applying your feedback to the design system. You can keep reviewing the current draft while the revision runs.';
     }
@@ -1693,20 +2884,33 @@ function findWorkspaceActivityMessage(messages: ChatMessage[]): ChatMessage | nu
   return null;
 }
 
-function DesignSystemPackageCard({ system }: { system: DesignSystemDetail }) {
+function DesignSystemPackageCard({
+  system,
+  busy,
+  onRebuildTokenContract,
+  onForceRebuildTokenContract,
+}: {
+  system: DesignSystemDetail;
+  busy: boolean;
+  onRebuildTokenContract: () => void;
+  onForceRebuildTokenContract: () => void;
+}) {
   const info = system.packageInfo;
   const manifest = info?.manifest;
   const evidence = info?.sourceEvidence;
+  const tokenContract = evidence?.tokenContract;
   const sourceLabel = manifest?.source?.type ? sourceTypeLabel(manifest.source.type) : sourceTypeLabel(system.source);
   const previewPages = manifest?.preview?.pages ?? [];
   const sourceFiles = manifest?.sourceFiles;
-  const sourceFileCount = [sourceFiles?.scanned, sourceFiles?.evidence, sourceFiles?.tokens, sourceFiles?.snippets]
+  const sourceFileCount = [sourceFiles?.scanned, sourceFiles?.evidence, sourceFiles?.tokens, sourceFiles?.report, sourceFiles?.snippets]
     .filter(Boolean)
     .length;
   const protocolItems = [
     manifest?.usage ? manifest.usage : null,
     manifest?.files?.design ?? 'DESIGN.md',
     manifest?.files?.tokens ?? 'tokens.css',
+    manifest?.files?.designTokens,
+    manifest?.files?.tailwind,
     manifest?.files?.components,
     manifest?.componentsManifest,
   ].filter((item): item is string => typeof item === 'string' && item.length > 0);
@@ -1714,6 +2918,7 @@ function DesignSystemPackageCard({ system }: { system: DesignSystemDetail }) {
     evidence?.scannedFileCount !== undefined ? { label: 'Scanned files', value: String(evidence.scannedFileCount) } : null,
     evidence?.tokenCount !== undefined ? { label: 'Source tokens', value: String(evidence.tokenCount) } : null,
     evidence?.snippetCount !== undefined ? { label: 'Snippets', value: String(evidence.snippetCount) } : null,
+    tokenContract?.fallbackTokens !== undefined ? { label: 'Fallback tokens', value: String(tokenContract.fallbackTokens) } : null,
     manifest?.fonts?.length ? { label: 'Fonts', value: String(manifest.fonts.length) } : null,
   ].filter((item): item is { label: string; value: string } => item !== null);
   const confidence = evidence?.confidence ? Object.entries(evidence.confidence) : [];
@@ -1733,6 +2938,40 @@ function DesignSystemPackageCard({ system }: { system: DesignSystemDetail }) {
           {manifest ? 'Hybrid ready' : 'Fallback'}
         </span>
       </div>
+      {manifest?.sourceFiles?.report ? (
+        <div className="ds-token-contract-row">
+          <span>
+            <strong>Token contract</strong>
+            <small>
+              {tokenContract?.grade ? `${tokenContract.grade} · ` : ''}
+              {tokenContract?.score !== undefined ? `score ${tokenContract.score}` : 'quality report available'}
+              {tokenContract?.recommendRebuild ? ' · rebuild recommended' : ''}
+            </small>
+          </span>
+          <div>
+            <Button
+              variant="ghost"
+              className="compact"
+              disabled={busy}
+              onClick={onRebuildTokenContract}
+            >
+              <Icon name="sparkles" />
+              Rebuild token contract
+            </Button>
+            {tokenContract?.recommendRebuild ? null : (
+              <Button
+                variant="ghost"
+                className="compact"
+                disabled={busy}
+                onClick={onForceRebuildTokenContract}
+              >
+                <Icon name="refresh" />
+                Force
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       <div className="ds-package-grid">
         <div>
@@ -1788,6 +3027,7 @@ function DesignSystemPackageCard({ system }: { system: DesignSystemDetail }) {
               sourceFiles?.scanned ? { path: sourceFiles.scanned, meta: 'Scanned file inventory' } : null,
               sourceFiles?.evidence ? { path: sourceFiles.evidence, meta: 'Evidence notes' } : null,
               sourceFiles?.tokens ? { path: sourceFiles.tokens, meta: 'Token extraction evidence' } : null,
+              sourceFiles?.report ? { path: sourceFiles.report, meta: 'Token contract quality report' } : null,
               sourceFiles?.snippets ? { path: sourceFiles.snippets, meta: 'Snippet index' } : null,
             ].filter((item): item is { path: string; meta: string } => item !== null)}
           />
@@ -2026,8 +3266,14 @@ interface DropZoneProps {
   accept?: string;
   names: string[];
   directory?: boolean;
+  // Fired when the user clicks the zone to open the file dialog;
+  // drag-and-drop does not trigger it (drops are covered by
+  // file_upload_result instead).
+  onZoneClick?: () => void;
   onBrowseFolder?: () => void;
   onRemoveName?: (name: string) => void;
+  onError?: (message: string | null) => void;
+  onProcessingStart?: () => () => void;
   onFiles: (names: string[], files: File[]) => void;
 }
 interface WebkitFileSystemEntry {
@@ -2067,7 +3313,11 @@ function SourceContextCard({ provenance }: { provenance?: DesignSystemProvenance
 
 function GenerationStatusCard({ job }: { job: DesignSystemGenerationJob }) {
   const active = job.status === 'queued' || job.status === 'running';
-  const noun = job.kind === 'revision' ? 'Revision' : 'Generation';
+  const noun = job.kind === 'token-contract-rebuild'
+    ? 'Token rebuild'
+    : job.kind === 'revision'
+      ? 'Revision'
+      : 'Generation';
   return (
     <div className={`ds-generation-review-card is-${job.status}`}>
       <div>
@@ -2075,9 +3325,11 @@ function GenerationStatusCard({ job }: { job: DesignSystemGenerationJob }) {
         <span>
           <strong>
             {active
-              ? job.kind === 'revision'
-                ? 'Open Design is revising'
-                : 'Open Design is still working'
+              ? job.kind === 'token-contract-rebuild'
+                ? 'Open Design is rebuilding tokens'
+                : job.kind === 'revision'
+                  ? 'Open Design is revising'
+                  : 'Open Design is still working'
               : job.status === 'failed'
                 ? `${noun} needs attention`
                 : `${noun} completed`}
@@ -2085,9 +3337,11 @@ function GenerationStatusCard({ job }: { job: DesignSystemGenerationJob }) {
           <small>
             {job.message
               ?? (active
-                ? job.kind === 'revision'
-                  ? 'Applying your feedback.'
-                  : 'Preparing the remaining files.'
+                ? job.kind === 'token-contract-rebuild'
+                  ? 'Preparing a reviewable token contract draft.'
+                  : job.kind === 'revision'
+                    ? 'Applying your feedback.'
+                    : 'Preparing the remaining files.'
                 : 'Review workspace is ready.')}
           </small>
         </span>
@@ -2152,6 +3406,14 @@ function RevisionDiffCard({
         <span>Proposed changes</span>
         <pre>{diff || revision.proposedBody}</pre>
       </div>
+      {revision.fileChanges?.length ? (
+        <div className="ds-revision-diff">
+          <span>File draft preview</span>
+          {revision.fileChanges.map((change) => (
+            <pre key={change.path}>{`${change.path}\n\n${revisionFileAddedText(change) || change.proposedContent}`}</pre>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -2178,18 +3440,135 @@ function DropZone({
   accept,
   names,
   directory,
+  onZoneClick,
   onBrowseFolder,
   onRemoveName,
+  onError,
+  onProcessingStart,
   onFiles,
 }: DropZoneProps) {
-  function readFiles(files: FileList | File[] | null) {
-    const nextFiles = Array.from(files ?? []);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const fileDialogPendingRef = useRef(false);
+  const fileDialogCanShowLoadingRef = useRef(false);
+  const fileDialogLoadingFinishRef = useRef<(() => void) | undefined>();
+  const fileDialogFocusDelayRef = useRef<number | undefined>();
+  const fileDialogWarmupRef = useRef<number | undefined>();
+  const fileDialogStaleRef = useRef<number | undefined>();
+
+  useEffect(() => {
+    if (!directory || !onProcessingStart) return undefined;
+    const input = inputRef.current;
+    const handleFocus = () => {
+      beginFileDialogReturnLoading();
+    };
+    const handleCancel = () => {
+      const finish = completeFileDialogTracking();
+      finishProcessingLater(finish);
+    };
+    window.addEventListener('focus', handleFocus);
+    input?.addEventListener('cancel', handleCancel);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      input?.removeEventListener('cancel', handleCancel);
+    };
+  });
+
+  function clearFileDialogTimer(ref: { current: number | undefined }) {
+    if (ref.current === undefined) return;
+    window.clearTimeout(ref.current);
+    ref.current = undefined;
+  }
+
+  function prepareFileDialogTracking() {
+    if (!directory || !onProcessingStart) return;
+    const previousFinish = completeFileDialogTracking();
+    previousFinish?.();
+    fileDialogPendingRef.current = true;
+    fileDialogCanShowLoadingRef.current = false;
+    fileDialogFocusDelayRef.current = window.setTimeout(() => {
+      fileDialogCanShowLoadingRef.current = true;
+      fileDialogFocusDelayRef.current = undefined;
+    }, SOURCE_FILE_DIALOG_FOCUS_DELAY_MS);
+    fileDialogWarmupRef.current = window.setTimeout(() => {
+      fileDialogCanShowLoadingRef.current = true;
+      fileDialogWarmupRef.current = undefined;
+      beginFileDialogReturnLoading();
+    }, SOURCE_FILE_DIALOG_WARMUP_MS);
+  }
+
+  function beginFileDialogReturnLoading() {
+    if (!fileDialogPendingRef.current) return;
+    if (!fileDialogCanShowLoadingRef.current) return;
+    if (!onProcessingStart) return;
+    if (fileDialogLoadingFinishRef.current) return;
+    fileDialogLoadingFinishRef.current = onProcessingStart();
+    fileDialogStaleRef.current = window.setTimeout(() => {
+      const finish = completeFileDialogTracking();
+      finishProcessingLater(finish);
+    }, SOURCE_FILE_DIALOG_STALE_MS);
+  }
+
+  function completeFileDialogTracking() {
+    clearFileDialogTimer(fileDialogFocusDelayRef);
+    clearFileDialogTimer(fileDialogWarmupRef);
+    clearFileDialogTimer(fileDialogStaleRef);
+    fileDialogPendingRef.current = false;
+    fileDialogCanShowLoadingRef.current = false;
+    const finish = fileDialogLoadingFinishRef.current;
+    fileDialogLoadingFinishRef.current = undefined;
+    return finish;
+  }
+
+  function finishProcessingLater(finish: (() => void) | undefined) {
+    if (!finish) return;
+    window.setTimeout(finish, SOURCE_PROCESSING_MIN_VISIBLE_MS);
+  }
+  function shouldShowProcessing(files: File[]) {
+    if (files.length >= SOURCE_PROCESSING_LOADING_FILE_COUNT) return true;
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    return totalBytes >= SOURCE_PROCESSING_LOADING_BYTES;
+  }
+  function stageFiles(nextFiles: File[]) {
     const nextNames = nextFiles.map((file) => localCodeRelativePath(file));
-    if (nextNames.length > 0) onFiles(nextNames, nextFiles);
+    if (nextNames.length > 0) {
+      onError?.(null);
+      onFiles(nextNames, nextFiles);
+    }
+  }
+  function processSelectedFiles(nextFiles: File[], activeFinish?: () => void) {
+    if (nextFiles.length === 0) {
+      finishProcessingLater(activeFinish);
+      return;
+    }
+    if (!shouldShowProcessing(nextFiles) || !onProcessingStart) {
+      stageFiles(nextFiles);
+      finishProcessingLater(activeFinish);
+      return;
+    }
+    const finish = activeFinish ?? onProcessingStart();
+    runAfterNextPaint(() => {
+      try {
+        stageFiles(nextFiles);
+      } finally {
+        finishProcessingLater(finish);
+      }
+    });
+  }
+  function readFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = '';
+    const finish = completeFileDialogTracking();
+    processSelectedFiles(files, finish);
   }
   async function readDrop(dataTransfer: DataTransfer) {
-    const nextFiles = await filesFromDataTransfer(dataTransfer);
-    readFiles(nextFiles);
+    onError?.(null);
+    try {
+      const nextFiles = await filesFromDataTransfer(dataTransfer);
+      processSelectedFiles(nextFiles);
+    } catch (error) {
+      if (!isFileSystemReadError(error)) throw error;
+      onError?.(FILE_SYSTEM_READ_ERROR_MESSAGE);
+    }
   }
   const directoryProps = directory ? ({ webkitdirectory: '', directory: '' } as Record<string, string>) : {};
 
@@ -2206,19 +3585,24 @@ function DropZone({
           }}
         >
           <input
+            ref={inputRef}
             className="ds-hidden-input"
             type="file"
             multiple
             accept={accept}
-            onChange={(event) => readFiles(event.target.files)}
+            onClick={() => {
+              onZoneClick?.();
+              prepareFileDialogTracking();
+            }}
+            onChange={readFiles}
             {...directoryProps}
           />
           <span>{names.length > 0 && !onRemoveName ? names.join(', ') : prompt}</span>
         </label>
         {onBrowseFolder ? (
-          <button type="button" className="ghost" onClick={onBrowseFolder}>
+          <Button variant="ghost" onClick={onBrowseFolder}>
             Browse folder
-          </button>
+          </Button>
         ) : null}
       </div>
       {names.length > 0 && onRemoveName ? (
@@ -2238,18 +3622,33 @@ function DropZone({
   );
 }
 
+function runAfterNextPaint(callback: () => void) {
+  if (typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(() => window.setTimeout(callback, 0));
+    return;
+  }
+  window.setTimeout(callback, 0);
+}
+
 async function filesFromDataTransfer(dataTransfer: DataTransfer): Promise<File[]> {
+  const fallbackFiles = Array.from(dataTransfer.files ?? []);
   const items = Array.from(dataTransfer.items ?? []);
+  if (items.length === 0) return fallbackFiles;
   const entries = items
     .map((item) => {
       const getter = (item as { webkitGetAsEntry?: () => unknown }).webkitGetAsEntry;
       return getter?.call(item) ?? null;
     })
     .filter(isWebkitFileSystemEntry);
-  if (entries.length === 0) return Array.from(dataTransfer.files ?? []);
-  const droppedFiles = await Promise.all(entries.map((entry) => filesFromEntry(entry, entry.name)));
-  const flattened = droppedFiles.flat();
-  return flattened.length > 0 ? flattened : Array.from(dataTransfer.files ?? []);
+  if (entries.length === 0) return fallbackFiles;
+  const results = await Promise.allSettled(entries.map((entry) => filesFromEntry(entry, entry.name)));
+  const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (rejected) {
+    if (fallbackFiles.length > 0) return fallbackFiles;
+    throw rejected.reason;
+  }
+  const droppedFiles = results.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));
+  return droppedFiles.length > 0 ? droppedFiles : fallbackFiles;
 }
 
 function isWebkitFileSystemEntry(entry: unknown): entry is WebkitFileSystemEntry {
@@ -2277,7 +3676,9 @@ async function filesFromEntry(entry: WebkitFileSystemEntry, relativePath: string
 
 function fileFromEntry(entry: WebkitFileSystemFileEntry): Promise<File> {
   return new Promise((resolve, reject) => {
-    entry.file(resolve, reject);
+    entry.file(resolve, (error) => {
+      reject(createFileSystemReadError('Could not read dropped file', error));
+    });
   });
 }
 
@@ -2293,7 +3694,9 @@ function readAllDirectoryEntries(entry: WebkitFileSystemDirectoryEntry): Promise
         }
         entries.push(...batch);
         readNextBatch();
-      }, reject);
+      }, (error) => {
+        reject(createFileSystemReadError('Could not read dropped folder', error));
+      });
     }
     readNextBatch();
   });
@@ -2331,6 +3734,7 @@ function GitHubRepositoryAccessPanel({
   authorizationUrl,
   error,
   onOpenConnectorsTab,
+  onToggleMethods,
   onConnect,
   onOpenAuthorization,
   onDisconnect,
@@ -2343,6 +3747,8 @@ function GitHubRepositoryAccessPanel({
   authorizationUrl: string | null;
   error: string | null;
   onOpenConnectorsTab?: () => void;
+  // Reports the post-toggle expanded state so the parent can track it.
+  onToggleMethods?: (expanded: boolean) => void;
   onConnect: () => void;
   onOpenAuthorization: () => void;
   onDisconnect: () => void;
@@ -2386,24 +3792,24 @@ function GitHubRepositoryAccessPanel({
   }
 
   const composioAction = !composioConfigured ? (
-    <button type="button" className="ghost" onClick={onOpenConnectorsTab}>
+    <Button variant="ghost" onClick={onOpenConnectorsTab}>
       Configure Composio
-    </button>
+    </Button>
   ) : connected || authorizationPending ? (
     <>
       {authorizationPending && authorizationUrl ? (
-        <button type="button" className="ghost" disabled={busy} onClick={onOpenAuthorization}>
+        <Button variant="ghost" disabled={busy} onClick={onOpenAuthorization}>
           Open authorization
-        </button>
+        </Button>
       ) : null}
-      <button type="button" className="ghost" disabled={busy} onClick={onDisconnect}>
+      <Button variant="ghost" disabled={busy} onClick={onDisconnect}>
         {action === 'disconnect' ? 'Disconnecting...' : 'Disconnect'}
-      </button>
+      </Button>
     </>
   ) : (
-    <button type="button" className="ghost" disabled={busy} onClick={onConnect}>
+    <Button variant="ghost" disabled={busy} onClick={onConnect}>
       {action === 'connect' ? 'Connecting...' : 'Connect via Composio'}
-    </button>
+    </Button>
   );
 
   const methods: GitHubAccessMethod[] = [
@@ -2444,15 +3850,19 @@ function GitHubRepositoryAccessPanel({
     >
       <div className="ds-github-access-header">
         <span>
-          <strong>Repository access: Auto</strong>
-          <p>Paste a GitHub URL. Open Design will use the first working access method.</p>
+          <strong>GitHub access: Auto</strong>
+          <p>GitHub repo links use the first working access method; other website links are saved as source references.</p>
         </span>
         <button
           type="button"
           className="ghost ds-github-access-toggle"
           aria-expanded={methodsExpanded}
           aria-controls="ds-github-access-methods"
-          onClick={() => setMethodsExpanded((current) => !current)}
+          onClick={() => {
+            const next = !methodsExpanded;
+            onToggleMethods?.(next);
+            setMethodsExpanded(next);
+          }}
         >
           <Icon name={methodsExpanded ? 'chevron-down' : 'chevron-right'} />
           {methodsExpanded ? 'Hide access methods' : 'Show access methods'}
@@ -2528,6 +3938,22 @@ function revisionAddedText(revision: DesignSystemRevision): string {
   return proposedLines.slice(index).join('\n').trim();
 }
 
+function revisionFileAddedText(
+  change: NonNullable<DesignSystemRevision['fileChanges']>[number],
+): string {
+  const baseLines = change.baseContent.split(/\r?\n/);
+  const proposedLines = change.proposedContent.split(/\r?\n/);
+  let index = 0;
+  while (
+    index < baseLines.length
+    && index < proposedLines.length
+    && baseLines[index] === proposedLines[index]
+  ) {
+    index += 1;
+  }
+  return proposedLines.slice(index).join('\n').trim();
+}
+
 function inferDesignSystemTitle(state: SetupState): string {
   const clean = state.company.trim().replace(/\s+/g, ' ');
   const contextTitle = titleCandidateFromCompanyContext(clean);
@@ -2537,7 +3963,8 @@ function inferDesignSystemTitle(state: SetupState): string {
     ?? githubUrlsFromState(state).map(githubRepoTitleFromUrl).find((title): title is string => Boolean(title));
   if (githubTitle) return designSystemTitle(githubTitle);
 
-  const urlTitle = genericUrlTitleFromText(clean);
+  const urlTitle = genericUrlTitleFromText(clean)
+    ?? sourceUrlsFromState(state).map(genericUrlTitleFromText).find((title): title is string => Boolean(title));
   if (urlTitle) return designSystemTitle(urlTitle);
 
   return designSystemTitle(clean.split(/\s+/).slice(0, 4).join(' ') || 'Product');
@@ -2605,6 +4032,9 @@ async function prepareCreatedDesignSystemProject({
   githubConnector,
   onProjectPrepared,
   onSystemsRefresh,
+  analyticsTrack,
+  ingestEntryFrom,
+  designSystemId,
 }: {
   project: Project;
   state: SetupState;
@@ -2612,11 +4042,115 @@ async function prepareCreatedDesignSystemProject({
   githubConnector: ConnectorDetail | null;
   onProjectPrepared?: (project: Project) => void;
   onSystemsRefresh?: () => Promise<void> | void;
+  analyticsTrack: (
+    event: string,
+    props: Record<string, unknown>,
+    options?: { requestId?: string; insertId?: string },
+  ) => void;
+  ingestEntryFrom: TrackingDesignSystemSourceIngestEntryFrom;
+  designSystemId: string;
 }): Promise<void> {
   try {
+    const githubUrls = githubUrlsFromState(state);
+    if (githubUrls.length > 0) {
+      const githubStart = performance.now();
+      emitSourceIngestResult(analyticsTrack, {
+        sourceType: 'github_repo',
+        ingestMethod: githubConnector?.status === 'connected'
+          ? 'github_api'
+          : 'git_clone',
+        result: 'success',
+        hasFallback: composioConfigured && githubConnector?.status === 'connected',
+        fallbackType: composioConfigured && githubConnector?.status === 'connected'
+          ? 'native_github_auth'
+          : 'none',
+        repoHost: dominantRepoHost(githubUrls),
+        fileCount: githubUrls.length,
+        totalBytes: null,
+        durationMs: Math.round(performance.now() - githubStart),
+        entryFrom: ingestEntryFrom,
+        projectId: project.id,
+        designSystemId,
+      });
+    }
+    const localStart = performance.now();
     const stagedLocalCode = await stageLocalCodeFiles(project.id, state.codeFileObjects);
+    if (state.codeFileObjects.length > 0 || state.codeFolders.length > 0) {
+      emitSourceIngestResult(analyticsTrack, {
+        sourceType: 'local_code',
+        ingestMethod: 'local_snapshot',
+        result: stagedLocalCode.uploadedPaths.length > 0
+          ? (stagedLocalCode.skippedCount > 0 ? 'partial_success' : 'success')
+          : 'failed',
+        hasFallback: false,
+        fallbackType: 'none',
+        repoHost: 'unknown',
+        fileCount: stagedLocalCode.uploadedPaths.length,
+        totalBytes: state.codeFileObjects.reduce(
+          (sum, f) => sum + (f.size || 0),
+          0,
+        ),
+        durationMs: Math.round(performance.now() - localStart),
+        errorCode: stagedLocalCode.uploadedPaths.length === 0
+          ? 'DS_LOCAL_INGEST_EMPTY'
+          : undefined,
+        entryFrom: ingestEntryFrom,
+        projectId: project.id,
+        designSystemId,
+      });
+    }
+    const figStart = performance.now();
     const stagedFigma = await stageFigmaFiles(project.id, state.figFileObjects);
+    if (state.figFileObjects.length > 0) {
+      emitSourceIngestResult(analyticsTrack, {
+        sourceType: 'fig',
+        ingestMethod: 'fig_parse',
+        result: stagedFigma.summaryPaths.length > 0
+          ? (stagedFigma.skippedCount > 0 ? 'partial_success' : 'success')
+          : 'failed',
+        hasFallback: false,
+        fallbackType: 'none',
+        repoHost: 'unknown',
+        fileCount: stagedFigma.summaryPaths.length,
+        totalBytes: state.figFileObjects.reduce(
+          (sum, f) => sum + (f.size || 0),
+          0,
+        ),
+        durationMs: Math.round(performance.now() - figStart),
+        errorCode: stagedFigma.summaryPaths.length === 0
+          ? 'DS_FIG_INGEST_EMPTY'
+          : undefined,
+        entryFrom: ingestEntryFrom,
+        projectId: project.id,
+        designSystemId,
+      });
+    }
+    const assetStart = performance.now();
     const stagedAssets = await stageAssetFiles(project.id, state.assetFileObjects);
+    if (state.assetFileObjects.length > 0) {
+      emitSourceIngestResult(analyticsTrack, {
+        sourceType: 'assets',
+        ingestMethod: 'asset_upload',
+        result: stagedAssets.uploadedPaths.length > 0
+          ? (stagedAssets.skippedCount > 0 ? 'partial_success' : 'success')
+          : 'failed',
+        hasFallback: false,
+        fallbackType: 'none',
+        repoHost: 'unknown',
+        fileCount: stagedAssets.uploadedPaths.length,
+        totalBytes: state.assetFileObjects.reduce(
+          (sum, f) => sum + (f.size || 0),
+          0,
+        ),
+        durationMs: Math.round(performance.now() - assetStart),
+        errorCode: stagedAssets.uploadedPaths.length === 0
+          ? 'DS_ASSET_INGEST_EMPTY'
+          : undefined,
+        entryFrom: ingestEntryFrom,
+        projectId: project.id,
+        designSystemId,
+      });
+    }
     await writeProjectTextFile(
       project.id,
       SOURCE_CONTEXT_MANIFEST_PATH,
@@ -2654,6 +4188,151 @@ async function prepareCreatedDesignSystemProject({
   }
 }
 
+// Picks the dominant repo host across a batch of GitHub URLs. Mixed
+// batches default to the most-common host; ties go to `'unknown'`.
+function dominantRepoHost(urls: string[]): TrackingDesignSystemRepoHost {
+  if (urls.length === 0) return 'unknown';
+  const counts = new Map<TrackingDesignSystemRepoHost, number>();
+  for (const url of urls) {
+    const host = designSystemRepoHostFromUrl(url);
+    counts.set(host, (counts.get(host) ?? 0) + 1);
+  }
+  let top: TrackingDesignSystemRepoHost = 'unknown';
+  let topCount = 0;
+  let tie = false;
+  for (const [host, count] of counts) {
+    if (count > topCount) {
+      top = host;
+      topCount = count;
+      tie = false;
+    } else if (count === topCount) {
+      tie = true;
+    }
+  }
+  return tie ? 'unknown' : top;
+}
+
+// Maps a generate-time snapshot to the DS origin enum. The dashboard
+// uses this on `design_system_create_result.design_system_source` to
+// split linked sources, files, and manual-only descriptions without
+// inspecting per-source counts.
+function deriveDesignSystemOrigin(snapshot: {
+  sourceCount: number;
+  hasBrandDescription: boolean;
+  hasDesignMd?: boolean;
+  sourceUrlCount: number;
+  githubRepoCount: number;
+  localFolderCount: number;
+  figFileCount: number;
+  assetFileCount: number;
+}): TrackingDesignSystemOrigin {
+  const nonGithubSourceUrlCount = Math.max(0, snapshot.sourceUrlCount - snapshot.githubRepoCount);
+  const filled = [
+    nonGithubSourceUrlCount > 0,
+    snapshot.githubRepoCount > 0,
+    snapshot.localFolderCount > 0,
+    snapshot.figFileCount > 0,
+    snapshot.assetFileCount > 0,
+    snapshot.hasDesignMd === true,
+  ].filter(Boolean).length;
+  if (filled >= 2) return 'mixed';
+  if (snapshot.githubRepoCount > 0) return 'github_repo';
+  if (nonGithubSourceUrlCount > 0) return 'source_url';
+  if (snapshot.localFolderCount > 0) return 'local_code';
+  if (snapshot.figFileCount > 0) return 'fig';
+  if (snapshot.assetFileCount > 0) return 'assets';
+  if (snapshot.hasDesignMd) return 'manual_create';
+  if (snapshot.hasBrandDescription) return 'manual_create';
+  return 'unknown';
+}
+
+// Multi-value companion to deriveDesignSystemOrigin: lists EVERY source used
+// instead of flattening to a single `mixed`, so analytics can read which
+// sources combine (tracking spec comment ②). Returns a comma-joined string
+// (target_platforms/connectors convention) or undefined when nothing is set.
+function deriveDesignSystemOrigins(snapshot: {
+  hasBrandDescription: boolean;
+  hasDesignMd?: boolean;
+  sourceUrlCount: number;
+  githubRepoCount: number;
+  localFolderCount: number;
+  figFileCount: number;
+  assetFileCount: number;
+}): string | undefined {
+  const nonGithubSourceUrlCount = Math.max(0, snapshot.sourceUrlCount - snapshot.githubRepoCount);
+  const origins: TrackingDesignSystemOrigin[] = [];
+  if (snapshot.githubRepoCount > 0) origins.push('github_repo');
+  if (nonGithubSourceUrlCount > 0) origins.push('source_url');
+  if (snapshot.localFolderCount > 0) origins.push('local_code');
+  if (snapshot.figFileCount > 0) origins.push('fig');
+  if (snapshot.assetFileCount > 0) origins.push('assets');
+  if (snapshot.hasDesignMd === true) origins.push('manual_create');
+  // Brand description alone (no concrete source) still reads as manual_create.
+  if (origins.length === 0 && snapshot.hasBrandDescription) origins.push('manual_create');
+  return origins.length > 0 ? origins.join(',') : undefined;
+}
+
+// Mirrors the DesignSystemsTab helper but lives here too so the
+// detail-view's status emissions don't have to import across files.
+function mapDsStatusToTracking(
+  status: string | null | undefined,
+): TrackingDesignSystemStatusValue {
+  switch (status) {
+    case 'draft':
+    case 'published':
+      return status;
+    default:
+      return 'unknown';
+  }
+}
+
+function emitSourceIngestResult(
+  track: (
+    event: string,
+    props: Record<string, unknown>,
+    options?: { requestId?: string; insertId?: string },
+  ) => void,
+  args: {
+    sourceType: TrackingDesignSystemIngestSourceType;
+    ingestMethod: TrackingDesignSystemIngestMethod;
+    result: TrackingDesignSystemSourceIngestResult;
+    hasFallback: boolean;
+    fallbackType:
+      | 'none'
+      | 'native_github_auth'
+      | 'local_git_clone'
+      | 'manual_upload'
+      | 'unknown';
+    repoHost: TrackingDesignSystemRepoHost;
+    fileCount: number;
+    totalBytes: number | null;
+    durationMs: number;
+    errorCode?: string;
+    entryFrom: TrackingDesignSystemSourceIngestEntryFrom;
+    projectId?: string;
+    designSystemId?: string;
+  },
+): void {
+  trackDesignSystemSourceIngestResult(track, {
+    page_name: 'design_systems',
+    area: 'design_system_create',
+    entry_from: args.entryFrom,
+    source_type: args.sourceType,
+    ingest_method: args.ingestMethod,
+    result: args.result,
+    has_fallback: args.hasFallback,
+    fallback_type: args.fallbackType,
+    repo_host: args.repoHost,
+    file_count: args.fileCount,
+    folder_file_count_bucket: designSystemFolderCountBucket(args.fileCount),
+    total_size_bucket: designSystemTotalSizeBucket(args.totalBytes),
+    error_code: args.errorCode,
+    duration_ms: Math.max(0, args.durationMs),
+    project_id: args.projectId,
+    design_system_id: args.designSystemId,
+  });
+}
+
 function humanizeRepositoryName(repo: string): string | undefined {
   const words = repo.replace(/\.git$/iu, '').replace(/[-_]+/gu, ' ').trim().split(/\s+/u).filter(Boolean);
   if (words.length === 0) return undefined;
@@ -2665,20 +4344,307 @@ function titleCaseRepositoryWord(word: string): string {
   return `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`;
 }
 
-function normalizeGithubUrl(value: string): string {
+const FIGMA_FILE_URL_RE = /^https:\/\/(?:www\.)?figma\.com\/(?:file|design|board)\/[A-Za-z0-9]+/i;
+
+// Accept a Figma file/design URL, tolerating a missing protocol. Returns the
+// normalized https URL, or '' when it isn't a recognizable Figma file link.
+function normalizeFigmaUrl(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return '';
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed.replace(/^\/+/, '')}`;
+  if (!FIGMA_FILE_URL_RE.test(withProtocol)) return '';
   try {
-    const url = new URL(trimmed);
+    return new URL(withProtocol).toString().replace(/\/$/, '');
+  } catch {
+    return '';
+  }
+}
+
+// "https://figma.com/design/<key>/My-File-Name" → "Figma · My File Name".
+function figmaUrlLabel(url: string): string {
+  try {
+    const parts = new URL(url).pathname.split('/').filter(Boolean);
+    const name = parts[2] ? decodeURIComponent(parts[2]).replace(/[-_]+/g, ' ').trim() : '';
+    return name ? `Figma · ${name}` : 'Figma file';
+  } catch {
+    return 'Figma file';
+  }
+}
+
+function normalizeSourceUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const href = sourceUrlHref(trimmed);
+  if (href) return href.replace(/\/$/, '');
+  const withProtocol = shouldAssumeHttps(trimmed) ? `https://${trimmed}` : trimmed;
+  try {
+    const url = new URL(withProtocol);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return trimmed.replace(/\/$/, '');
     return url.toString().replace(/\/$/, '');
   } catch {
     return trimmed.replace(/\/$/, '');
   }
 }
 
+function shouldAssumeHttps(value: string): boolean {
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(value)) return false;
+  if (/^git@github\.com:/iu.test(value)) return false;
+  return /^(?:www\.)?[^/\s]+\.[^/\s]{2,}(?:[/?#].*)?$/u.test(value)
+    || /^github\.com\//iu.test(value);
+}
+
+function sourceUrlLabel(url: string): string {
+  if (isGithubRepositoryUrl(url)) return githubRepoLabel(url);
+  try {
+    const parsed = new URL(sourceUrlHref(url) ?? url);
+    return `${parsed.hostname.replace(/^www\./iu, '')}${parsed.pathname === '/' ? '' : parsed.pathname}`.replace(/\/$/, '');
+  } catch {
+    return url;
+  }
+}
+
+function sourceUrlHref(url: string): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  const sshGithub = /^git@github\.com:([^/\s]+)\/([^/\s#?]+?)(?:\.git)?(?:[?#].*)?$/iu.exec(trimmed);
+  if (sshGithub) return `https://github.com/${sshGithub[1]}/${sshGithub[2]}`;
+  const shorthandGithub = /^([^/\s]+)\/([^/\s#?]+?)(?:\.git)?$/u.exec(trimmed);
+  if (shorthandGithub && isGithubOwnerShorthand(shorthandGithub[1]!)) {
+    return `https://github.com/${shorthandGithub[1]}/${shorthandGithub[2]}`;
+  }
+  const withProtocol = shouldAssumeHttps(trimmed) ? `https://${trimmed}` : trimmed;
+  try {
+    const parsed = new URL(withProtocol);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function isGithubOwnerShorthand(value: string): boolean {
+  return /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/iu.test(value);
+}
+
+function sourceUrlIcon(url: string): IconName {
+  if (isGithubRepositoryUrl(url)) return 'github';
+  return sourceUrlHref(url) ? 'external-link' : 'link';
+}
+
+// Favicon for a source-link chip. GitHub repos keep their mark glyph; anything
+// that doesn't resolve to an http(s) origin has no favicon, so the chip falls
+// back to the `sourceUrlIcon` glyph.
+function sourceUrlFaviconUrl(url: string): string | null {
+  if (isGithubRepositoryUrl(url)) return null;
+  const href = sourceUrlHref(url);
+  if (!href) return null;
+  try {
+    return brandFaviconUrl(new URL(href).hostname, 64);
+  } catch {
+    return null;
+  }
+}
+
+function SourceLinkFavicon({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [url]);
+  const faviconUrl = failed ? null : sourceUrlFaviconUrl(url);
+  if (!faviconUrl) {
+    return (
+      <span className="ds-source-link-favicon ds-source-link-favicon--glyph" aria-hidden>
+        <Icon name={sourceUrlIcon(url)} size={14} />
+      </span>
+    );
+  }
+  return (
+    <img
+      className="ds-source-link-favicon"
+      src={faviconUrl}
+      alt=""
+      width={16}
+      height={16}
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+function buildDesignMdPreviewModel(markdown: string): DesignMdPreviewModel {
+  const parsed = parseDesignMd(markdown);
+  const colors = parsed.colors
+    .map((color) => ({
+      label: color.name || color.role || 'Color',
+      role: color.role,
+      usage: color.usage,
+      hex: normalizePreviewHex(color.hex),
+    }))
+    .filter((color): color is DesignMdPreviewColor & { role: string; usage: string } => Boolean(color.hex))
+    .slice(0, 8);
+  const allColors = colors.length > 0 ? colors : [
+    { label: 'Primary', role: 'accent', usage: 'Primary actions', hex: '#cc6344' },
+    { label: 'Background', role: 'background', usage: 'Page canvas', hex: '#ffffff' },
+    { label: 'Foreground', role: 'foreground', usage: 'Text', hex: '#1f1f22' },
+  ];
+  const colorPrimary =
+    findPreviewColor(allColors, /(accent|primary|brand|cta|tertiary|link)/)
+    ?? firstNonNeutralColor(allColors)
+    ?? allColors[0]!.hex;
+  const lightBackground =
+    findPreviewColor(allColors, /(background|canvas|page|paper|white)/, 'light')
+    ?? '#ffffff';
+  const lightForeground =
+    findPreviewColor(allColors, /(foreground|text|ink|heading|body|black)/, 'dark')
+    ?? '#222326';
+  const lightSurface =
+    findPreviewColor(allColors, /(surface|card|panel|raised)/, 'light')
+    ?? mixPreviewHex(lightBackground, '#f5f4f0', 0.72);
+  const lightBorder =
+    findPreviewColor(allColors, /(border|divider|line|stroke|hairline)/)
+    ?? mixPreviewHex(lightForeground, lightBackground, 0.14);
+  const lightMuted =
+    findPreviewColor(allColors, /(muted|secondary|caption|metadata|slate)/)
+    ?? mixPreviewHex(lightForeground, lightBackground, 0.54);
+  const darkBackground =
+    findPreviewColor(allColors, /(background|canvas|page|paper)/, 'dark')
+    ?? mixPreviewHex(lightForeground, '#000000', 0.72);
+  const darkForeground =
+    findPreviewColor(allColors, /(foreground|text|ink|heading|body)/, 'light')
+    ?? mixPreviewHex(lightBackground, '#ffffff', 0.92);
+  const colorPrimaryBg = mixPreviewHex(colorPrimary, lightBackground, 0.14);
+  return {
+    name: parsed.name || 'Design system',
+    description: parsed.description || parsed.tagline,
+    displayFont: cssFontFamily(parsed.typography.display?.family ?? parsed.typography.body?.family ?? fontFromMarkdown(markdown) ?? 'Inter'),
+    bodyFont: cssFontFamily(parsed.typography.body?.family ?? parsed.typography.display?.family ?? fontFromMarkdown(markdown) ?? 'Inter'),
+    radius: radiusFromDesignMd(parsed.layout.radius || markdown),
+    fontSize: fontSizeFromDesignMd(markdown),
+    colors: allColors.map((color) => ({ label: color.label, hex: color.hex })),
+    colorPrimary,
+    colorPrimaryBg,
+    colorPrimaryHover: mixPreviewHex(colorPrimary, '#ffffff', 0.86),
+    colorPrimaryActive: mixPreviewHex(colorPrimary, '#000000', 0.82),
+    light: {
+      background: lightBackground,
+      surface: lightSurface,
+      foreground: lightForeground,
+      muted: lightMuted,
+      border: lightBorder,
+    },
+    dark: {
+      background: darkBackground,
+      surface: mixPreviewHex(darkBackground, '#ffffff', 0.9),
+      foreground: darkForeground,
+      muted: mixPreviewHex(darkForeground, darkBackground, 0.68),
+      border: mixPreviewHex(darkForeground, darkBackground, 0.2),
+    },
+  };
+}
+
+function normalizePreviewHex(value: string | undefined): string | null {
+  const match = value?.match(/#[0-9a-fA-F]{3}\b|#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{8}\b/);
+  if (!match) return null;
+  const raw = match[0].toLowerCase();
+  if (raw.length === 4) {
+    return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`;
+  }
+  if (raw.length === 9) return raw.slice(0, 7);
+  return raw;
+}
+
+function findPreviewColor(
+  colors: Array<DesignMdPreviewColor & { role?: string; usage?: string }>,
+  matcher: RegExp,
+  tone?: 'light' | 'dark',
+): string | null {
+  for (const color of colors) {
+    const text = `${color.label} ${color.role ?? ''} ${color.usage ?? ''}`.toLowerCase();
+    if (!matcher.test(text)) continue;
+    if (tone === 'light' && previewLuminance(color.hex) < 0.72) continue;
+    if (tone === 'dark' && previewLuminance(color.hex) > 0.34) continue;
+    return color.hex;
+  }
+  return null;
+}
+
+function firstNonNeutralColor(colors: Array<DesignMdPreviewColor & { role?: string; usage?: string }>): string | null {
+  return colors.find((color) => {
+    const rgb = previewRgb(color.hex);
+    if (!rgb) return false;
+    const spread = Math.max(rgb.r, rgb.g, rgb.b) - Math.min(rgb.r, rgb.g, rgb.b);
+    return spread > 18 && previewLuminance(color.hex) > 0.08 && previewLuminance(color.hex) < 0.88;
+  })?.hex ?? null;
+}
+
+function previewRgb(hex: string): { r: number; g: number; b: number } | null {
+  const normalized = normalizePreviewHex(hex);
+  if (!normalized) return null;
+  return {
+    r: parseInt(normalized.slice(1, 3), 16),
+    g: parseInt(normalized.slice(3, 5), 16),
+    b: parseInt(normalized.slice(5, 7), 16),
+  };
+}
+
+function previewLuminance(hex: string): number {
+  const rgb = previewRgb(hex);
+  if (!rgb) return 1;
+  return (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+}
+
+function mixPreviewHex(hex: string, other: string, hexWeight: number): string {
+  const a = previewRgb(hex) ?? { r: 0, g: 0, b: 0 };
+  const b = previewRgb(other) ?? { r: 255, g: 255, b: 255 };
+  const weight = Math.max(0, Math.min(1, hexWeight));
+  const mixed = {
+    r: Math.round(a.r * weight + b.r * (1 - weight)),
+    g: Math.round(a.g * weight + b.g * (1 - weight)),
+    b: Math.round(a.b * weight + b.b * (1 - weight)),
+  };
+  return `#${toHexByte(mixed.r)}${toHexByte(mixed.g)}${toHexByte(mixed.b)}`;
+}
+
+function toHexByte(value: number): string {
+  return Math.max(0, Math.min(255, value)).toString(16).padStart(2, '0');
+}
+
+function readableTextColor(hex: string): string {
+  return previewLuminance(hex) > 0.56 ? '#111111' : '#ffffff';
+}
+
+function cssFontFamily(family: string): string {
+  const clean = family.replace(/["'`]/g, '').trim();
+  if (!clean) return 'Inter, ui-sans-serif, system-ui, sans-serif';
+  const head = /\s/.test(clean) ? `'${clean}'` : clean;
+  return `${head}, ui-sans-serif, system-ui, sans-serif`;
+}
+
+function fontFromMarkdown(markdown: string): string | null {
+  const match =
+    markdown.match(/fontFamily:\s*["']?([^"'\n]+)/i)
+    ?? markdown.match(/font-family:\s*["']?([^"'\n;]+)/i)
+    ?? markdown.match(/family:\s*["']?([^"'\n]+)/i);
+  return match ? match[1]!.trim() : null;
+}
+
+function radiusFromDesignMd(value: string): number {
+  const match = value.match(/(?:radius|borderRadius)[^0-9]{0,16}(\d+(?:\.\d+)?)/i);
+  if (!match) return 6;
+  return Math.max(0, Math.min(24, Math.round(Number(match[1]))));
+}
+
+function fontSizeFromDesignMd(markdown: string): number {
+  const match = markdown.match(/(?:fontSize|font-size|base font)[^0-9]{0,16}(\d+(?:\.\d+)?)/i);
+  if (!match) return 14;
+  return Math.max(11, Math.min(22, Math.round(Number(match[1]))));
+}
+
 function githubRepoLabel(url: string): string {
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(sourceUrlHref(url) ?? url);
     const parts = parsed.pathname.split('/').filter(Boolean);
     if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
   } catch {
@@ -2687,11 +4653,78 @@ function githubRepoLabel(url: string): string {
   return url;
 }
 
-function githubUrlsFromState(state: SetupState): string[] {
+function sourceUrlsFromState(state: SetupState): string[] {
   return Array.from(new Set([
-    ...state.githubUrls,
-    ...(state.githubUrl.trim() ? [normalizeGithubUrl(state.githubUrl)] : []),
+    ...state.sourceUrls,
+    ...(state.sourceUrl.trim() ? [normalizeSourceUrl(state.sourceUrl)] : []),
   ].filter(Boolean)));
+}
+
+function figmaUrlsFromState(state: SetupState): string[] {
+  return Array.from(new Set([
+    ...state.figmaUrls,
+    ...(state.figmaUrl.trim() ? [state.figmaUrl.trim()] : []),
+  ].filter(Boolean)));
+}
+
+function githubUrlsFromState(state: SetupState): string[] {
+  return sourceUrlsFromState(state).filter(isGithubRepositoryUrl);
+}
+
+function nonGithubSourceUrlsFromState(state: SetupState): string[] {
+  return sourceUrlsFromState(state).filter((url) => !isGithubRepositoryUrl(url));
+}
+
+function hasCreationSource(state: SetupState): boolean {
+  return (
+    sourceUrlsFromState(state).length > 0
+    || figmaUrlsFromState(state).length > 0
+    || state.designMd.trim().length > 0
+    || state.company.trim().length > 0
+    || state.notes.trim().length > 0
+    || state.codeFolders.length > 0
+    || state.codeFiles.length > 0
+    || state.codeFileObjects.length > 0
+    || state.figFiles.length > 0
+    || state.figFileObjects.length > 0
+    || state.assetFiles.length > 0
+    || state.assetFileObjects.length > 0
+  );
+}
+
+function hasProjectStagingSources(state: SetupState): boolean {
+  return (
+    sourceUrlsFromState(state).length > 1
+    || githubUrlsFromState(state).length > 0
+    || figmaUrlsFromState(state).length > 0
+    || state.codeFolders.length > 0
+    || state.codeFiles.length > 0
+    || state.codeFileObjects.length > 0
+    || state.figFiles.length > 0
+    || state.figFileObjects.length > 0
+    || state.assetFiles.length > 0
+    || state.assetFileObjects.length > 0
+  );
+}
+
+function isImeComposing(event: KeyboardEvent<HTMLInputElement>): boolean {
+  const nativeEvent = event.nativeEvent as KeyboardEvent<HTMLInputElement>['nativeEvent'] & {
+    keyCode?: number;
+  };
+  return nativeEvent.isComposing || nativeEvent.keyCode === 229 || event.key === 'Process';
+}
+
+function isGithubRepositoryUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  if (/^git@github\.com:[^/\s]+\/[^/\s#?]+(?:\.git)?(?:[?#].*)?$/iu.test(trimmed)) return true;
+  try {
+    const parsed = new URL(sourceUrlHref(trimmed) ?? trimmed);
+    if (parsed.hostname.toLowerCase() !== 'github.com') return false;
+    return parsed.pathname.split('/').filter(Boolean).length >= 2;
+  } catch {
+    return /^([^/\s]+)\/([^/\s#?]+?)(?:\.git)?$/u.test(trimmed);
+  }
 }
 
 function isComposioConfigured(composio: AppConfig['composio'] | undefined): boolean {
@@ -2765,20 +4798,9 @@ interface StagedLocalCodeContext {
 }
 
 interface StagedFigmaContext {
+  /** Paths to each `.fig`'s decoded `figma/.../DESIGN-context.md` snapshot. */
   summaryPaths: string[];
   skippedCount: number;
-}
-
-interface FigmaLocalSummary {
-  name: string;
-  size: number;
-  lastModified: number;
-  parseBytes: number;
-  colors: string[];
-  textStyles: string[];
-  namedLayers: string[];
-  componentHints: string[];
-  readableSample: string;
 }
 
 interface StagedAssetContext {
@@ -2920,104 +4942,30 @@ async function stageFigmaFiles(projectId: string, files: File[]): Promise<Staged
   if (files.length === 0) return { summaryPaths: [], skippedCount: 0 };
   const selected = selectFigmaFiles(files);
   const summaryPaths: string[] = [];
+  let failed = 0;
+  let index = 0;
   for (const file of selected) {
-    const summary = await summarizeFigmaFile(file);
-    const desiredName = `${FIGMA_CONTEXT_ROOT}/${safeContextFileName(resourceRelativePath(file), 'figma-file')}`;
-    const written = await writeProjectTextFile(projectId, desiredName, renderFigmaSummary(summary));
-    if (written) {
-      summaryPaths.push(written.name);
+    // Decode each `.fig` on the daemon (offline, no Figma account) into a real
+    // `figma/` snapshot — node tree, tokens, assets, thumbnail, and an
+    // agent-facing DESIGN-context.md. Distinct subdirs keep multiple files
+    // from overwriting each other; a single file uses the default `figma/`.
+    const base = safeContextFileName(resourceRelativePath(file), `figma-${index}`).replace(/\.fig$/i, '');
+    const outcome = await importProjectFigma(
+      projectId,
+      file,
+      selected.length > 1 ? { subdir: `figma-${base}` } : undefined,
+    );
+    if (outcome.ok) {
+      summaryPaths.push(outcome.result.contextPath);
+    } else {
+      failed += 1;
     }
+    index += 1;
   }
   return {
     summaryPaths,
-    skippedCount: Math.max(0, files.length - selected.length),
+    skippedCount: Math.max(0, files.length - selected.length) + failed,
   };
-}
-
-async function summarizeFigmaFile(file: File): Promise<FigmaLocalSummary> {
-  const parseBytes = Math.min(file.size, MAX_FIGMA_PARSE_BYTES);
-  let readable = '';
-  try {
-    readable = await file.slice(0, parseBytes).text();
-  } catch {
-    readable = '';
-  }
-  const normalized = readable
-    .replace(/[^\t\n\r\x20-\x7e]+/g, ' ')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-  const namedLayers = uniqueMatches(normalized, /"name"\s*:\s*"([^"]{2,80})"/g, 40);
-  const textStyles = uniqueMatches(
-    normalized,
-    /"(?:fontFamily|fontPostScriptName|fontName|family|styleName)"\s*:\s*"([^"]{2,80})"/g,
-    30,
-  );
-  const colors = Array.from(new Set(normalized.match(/#[0-9a-fA-F]{6,8}\b/g) ?? [])).slice(0, 40);
-  const componentHints = namedLayers
-    .filter((name) => /(button|card|modal|dialog|input|nav|tab|menu|toast|badge|avatar|table|list|toolbar|sidebar)/i.test(name))
-    .slice(0, 30);
-  return {
-    name: resourceRelativePath(file),
-    size: file.size,
-    lastModified: file.lastModified,
-    parseBytes,
-    colors,
-    textStyles,
-    namedLayers,
-    componentHints,
-    readableSample: normalized.slice(0, 1600),
-  };
-}
-
-function uniqueMatches(text: string, pattern: RegExp, limit: number): string[] {
-  const values: string[] = [];
-  const seen = new Set<string>();
-  for (const match of text.matchAll(pattern)) {
-    const value = match[1]?.trim();
-    if (!value || seen.has(value)) continue;
-    seen.add(value);
-    values.push(value);
-    if (values.length >= limit) break;
-  }
-  return values;
-}
-
-function renderFigmaSummary(summary: FigmaLocalSummary): string {
-  return [
-    `# Figma Source Summary: ${summary.name}`,
-    '',
-    'The original .fig source was parsed locally in the browser. This markdown summary is the only Figma-derived context copied into the design-system project.',
-    '',
-    '## File',
-    '',
-    `- Name: ${summary.name}`,
-    `- Size: ${formatBytes(summary.size)}`,
-    `- Last modified: ${summary.lastModified ? new Date(summary.lastModified).toISOString() : 'unknown'}`,
-    `- Local parse window: ${formatBytes(summary.parseBytes)}`,
-    '',
-    '## Extracted Signals',
-    '',
-    summary.colors.length ? `Colors:\n${summary.colors.map((color) => `- ${color}`).join('\n')}` : 'Colors: no readable color tokens found.',
-    '',
-    summary.textStyles.length ? `Text styles and font names:\n${summary.textStyles.map((style) => `- ${style}`).join('\n')}` : 'Text styles and font names: no readable text-style tokens found.',
-    '',
-    summary.componentHints.length ? `Component-like layer names:\n${summary.componentHints.map((name) => `- ${name}`).join('\n')}` : 'Component-like layer names: no obvious component names found.',
-    '',
-    summary.namedLayers.length ? `Readable layer names:\n${summary.namedLayers.map((name) => `- ${name}`).join('\n')}` : 'Readable layer names: no readable layer names found.',
-    '',
-    '## Readable Sample',
-    '',
-    summary.readableSample
-      ? `\`\`\`text\n${summary.readableSample}\n\`\`\``
-      : 'No readable text sample was available from the local parse window. Ask for screenshots, exports, or a Figma link if visual evidence is required.',
-    '',
-  ].join('\n');
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
-  return `${Math.round(bytes / (1024 * 102.4)) / 10} MB`;
 }
 
 async function stageAssetFiles(projectId: string, files: File[]): Promise<StagedAssetContext> {
@@ -3038,15 +4986,77 @@ async function stageAssetFiles(projectId: string, files: File[]): Promise<Staged
 }
 
 function buildSourceNotes(state: SetupState): string {
+  const sourceUrls = sourceUrlsFromState(state);
   const githubUrls = githubUrlsFromState(state);
+  const websiteUrls = nonGithubSourceUrlsFromState(state);
+  const figmaUrls = figmaUrlsFromState(state);
   const localCode = localCodeReferences(state);
   return [
-    githubUrls.length ? `GitHub/code: ${githubUrls.join(', ')}` : '',
+    sourceUrls.length ? `Source links: ${sourceUrls.join(', ')}` : '',
+    githubUrls.length ? `GitHub repositories: ${githubUrls.join(', ')}` : '',
+    websiteUrls.length ? `Website/source URLs: ${websiteUrls.join(', ')}` : '',
     localCode.length ? `Local code: ${localCode.join(', ')}` : '',
     state.figFiles.length ? `Figma files: ${state.figFiles.join(', ')}` : '',
+    figmaUrls.length ? `Figma URLs: ${figmaUrls.join(', ')}` : '',
     state.assetFiles.length ? `Fonts, logos and assets: ${state.assetFiles.join(', ')}` : '',
     state.notes.trim() ? `Additional notes: ${state.notes.trim()}` : '',
   ].filter(Boolean).join('\n');
+}
+
+function buildFallbackDesignMdFromState(state: SetupState): string {
+  if (!hasCreationSource(state)) return '';
+  const title = inferDesignSystemTitle(state);
+  const sourceNotes = buildSourceNotes(state);
+  const overview =
+    state.company.trim()
+    || state.notes.trim()
+    || sourceNotes
+    || 'Design system generated from source material supplied in Open Design.';
+  return [
+    '---',
+    `name: ${yamlString(title.replace(/\s+Design System$/iu, ''))}`,
+    `description: ${yamlString(truncateForDesignMd(overview, 320))}`,
+    'colors:',
+    '  background: "#ffffff"',
+    '  foreground: "#111111"',
+    '  accent: "#1677ff"',
+    '  surface: "#f7f8fa"',
+    '  muted: "#6b7280"',
+    '  border: "#d9dee7"',
+    'typography:',
+    '  display: "Inter"',
+    '  body: "Inter"',
+    'radius: "8px"',
+    'spacing: "8px baseline grid"',
+    '---',
+    '',
+    `# ${title}`,
+    '',
+    '## Overview',
+    '',
+    overview,
+    '',
+    '## Source Material',
+    '',
+    sourceNotes || 'No website was linked. Use the provided files, notes, and source context as the design-system basis.',
+    '',
+    '## Components',
+    '',
+    '- Button',
+    '- Card',
+    '- Form field',
+    '- Navigation',
+  ].join('\n');
+}
+
+function yamlString(value: string): string {
+  return JSON.stringify(value.replace(/\s+/g, ' ').trim());
+}
+
+function truncateForDesignMd(value: string, max: number): string {
+  const clean = value.replace(/\s+/g, ' ').trim();
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 1).trim()}...`;
 }
 
 function buildCreationAgentPrompt(
@@ -3058,6 +5068,7 @@ function buildCreationAgentPrompt(
 ): string {
   const sourceNotes = buildSourceNotes(state);
   const githubUrls = githubUrlsFromState(state);
+  const websiteUrls = nonGithubSourceUrlsFromState(state);
   const localCode = localCodeReferences(state);
   const githubRunbook = buildGithubConnectorRunbook(githubUrls);
   const localFolderRunbook = buildLocalFolderRunbook(state.codeFolders);
@@ -3067,11 +5078,11 @@ function buildCreationAgentPrompt(
     '',
     'Autonomy requirement:',
     '- Do not ask setup or clarification questions during design-system generation.',
-    '- Do not emit `<question-form>`, "Quick brief — 30 seconds", `AskUserQuestion`, direction cards, choice cards, or any UI that waits for user input.',
+    '- Do not emit `<question-form>`, "Quick brief — 30 seconds", direction cards, choice cards, or any UI that waits for user input.',
     '- The setup page already collected the brief. If target surfaces, review priority, or workspace depth are missing, choose sensible defaults and begin generating the design-system artifacts immediately.',
     '',
     'Project boundary:',
-    '- All GitHub extraction, local evidence intake, source reading, design-system construction, package audit, and final artifact writes must happen inside this project workspace and this project chat run.',
+    '- All GitHub extraction, website/source URL review, local evidence intake, source reading, design-system construction, package audit, and final artifact writes must happen inside this project workspace and this project chat run.',
     '- Treat `/design-systems/create` as setup only. Do not depend on that page for progress, review, or generated output; the project is the source of truth.',
     '',
     'Use the files in this project as the design system source for future projects. Update `DESIGN.md` as the canonical rules document, and update supporting files when they make the system easier to review or reuse.',
@@ -3095,10 +5106,11 @@ function buildCreationAgentPrompt(
     '',
     'Core execution order:',
     '1. Read `context/source-context.md` first, then run every intake command it lists for linked GitHub repositories and linked local code folders before editing design-system files.',
-    '2. Do not write `DESIGN.md`, token files, previews, UI-kit examples, or asset notes from URL text alone. When GitHub, local code, Figma, or assets were provided, preserve concrete evidence under `context/` and use it as the basis for the design-system files.',
-    '3. Before writing the design-system files, inventory the local evidence for product identity, real color/theme tokens, font families, brand assets, app shell layout, navigation, chat/input surfaces, and reusable components. Use this inventory to avoid generic tokens.',
-    '4. Copy high-signal source component examples from the snapshots when they explain the design system better than prose alone. Keep these examples outside `context/` as reusable package artifacts, not only as hidden evidence.',
-    '5. After evidence is collected, update the project files directly and keep the `Design System` tab reviewable.',
+    '2. Review linked website/source URLs when they are public and reachable. Treat them as source references, not repository snapshots; if a site cannot be reached, state that limitation and continue from the evidence that is available.',
+    '3. Do not write `DESIGN.md`, token files, previews, UI-kit examples, or asset notes from URL text alone. When GitHub, local code, Figma, or assets were provided, preserve concrete evidence under `context/` and use it as the basis for the design-system files.',
+    '4. Before writing the design-system files, inventory the local evidence for product identity, real color/theme tokens, font families, brand assets, app shell layout, navigation, chat/input surfaces, and reusable components. Use this inventory to avoid generic tokens.',
+    '5. Copy high-signal source component examples from the snapshots when they explain the design system better than prose alone. Keep these examples outside `context/` as reusable package artifacts, not only as hidden evidence.',
+    '6. After evidence is collected, update the project files directly and keep the `Design System` tab reviewable.',
     '',
     'Completion gate:',
     '- For each linked GitHub repository, there must be a `context/github/*.md` evidence note plus command-written snapshots under `context/github/*/files/` before writing final design-system rules or previews. The snapshots should include theme/token/source files and any available binary assets or fonts selected by the intake command.',
@@ -3116,9 +5128,12 @@ function buildCreationAgentPrompt(
     '',
     `Company / design system context:\n${state.company.trim()}`,
     sourceContextManifestPath
-      ? `\nSource context manifest:\n- Read \`${sourceContextManifestPath}\` before drafting. It records GitHub access readiness, local folder links, copied code snapshots, uploaded resources, and the review contract for this design system project.`
+      ? `\nSource context manifest:\n- Read \`${sourceContextManifestPath}\` before drafting. It records source links, GitHub access readiness, local folder links, copied code snapshots, uploaded resources, and the review contract for this design system project.`
       : '',
     sourceNotes ? `\nProvided resources:\n${sourceNotes}` : '',
+    websiteUrls.length
+      ? `Use the linked website/source URLs as public style and product references when they are reachable: ${websiteUrls.join(', ')}. Capture concrete observations in context notes before relying on them for design decisions.`
+      : '',
     githubUrls.length
       ? githubRunbook
       : '',
@@ -3132,10 +5147,13 @@ function buildCreationAgentPrompt(
       ? `${stagedLocalCode.skippedCount} local code files were skipped because they were too large, duplicate, generated, or outside the focused upload limit.`
       : '',
     stagedFigma?.summaryPaths.length
-      ? `Use the locally parsed Figma summaries in \`${FIGMA_CONTEXT_ROOT}/\`: ${stagedFigma.summaryPaths.join(', ')}. Treat these as evidence extracted from .fig files; the original .fig files were not uploaded.`
+      ? `Each .fig was decoded into a real design snapshot — read the context briefs first: ${stagedFigma.summaryPaths.join(', ')}. They sit beside \`figma/tree.json\`, \`figma/tokens.json\`, \`figma/assets/\`, and a \`figma/thumbnail.png\` preview. Bind the system to these real tokens, type, and components.`
       : '',
     stagedFigma?.skippedCount
-      ? `${stagedFigma.skippedCount} .fig files were skipped because they were duplicate or outside the focused parse limit.`
+      ? `${stagedFigma.skippedCount} .fig files were skipped (duplicate or failed to decode).`
+      : '',
+    state.figmaUrls.length
+      ? `Figma file URL(s) provided as the canonical design source: ${state.figmaUrls.join(', ')}. Use them as the reference for layout, tokens, type, and components. If a URL isn't directly reachable, ask the user to export it as a .fig (File → Save local copy) for a full offline decode, or to share a screenshot.`
       : '',
     stagedAssets?.uploadedPaths.length
       ? `Use uploaded brand assets in \`${ASSET_UPLOAD_ROOT}/\`: ${stagedAssets.uploadedPaths.slice(0, 20).join(', ')}${stagedAssets.uploadedPaths.length > 20 ? `, and ${stagedAssets.uploadedPaths.length - 20} more` : ''}.`
@@ -3161,7 +5179,9 @@ function buildSourceContextManifest(
     stagedAssets?: StagedAssetContext;
   },
 ): string {
+  const sourceUrls = sourceUrlsFromState(state);
   const githubUrls = githubUrlsFromState(state);
+  const websiteUrls = nonGithubSourceUrlsFromState(state);
   const linkedFolders = state.codeFolders;
   const copiedSnapshots = options.stagedLocalCode?.uploadedPaths ?? [];
   const skippedCount = options.stagedLocalCode?.skippedCount ?? 0;
@@ -3181,6 +5201,16 @@ function buildSourceContextManifest(
     '',
     state.company.trim() || 'No company or product context provided yet.',
   ];
+
+  sections.push('', '## Source Links', '');
+  if (sourceUrls.length > 0) {
+    sections.push(...sourceUrls.map((url) => `- ${url}`));
+  } else {
+    sections.push('- None linked.');
+  }
+  if (websiteUrls.length > 0) {
+    sections.push('', 'Website/source URLs should be treated as public style and product references when reachable. Record concrete observations before using them as design-system evidence.');
+  }
 
   sections.push('', '## GitHub Repositories', '');
   if (githubUrls.length > 0) {
@@ -3217,13 +5247,17 @@ function buildSourceContextManifest(
   sections.push('', '## Design And Brand Resources', '');
   sections.push(state.figFiles.length ? `Figma files selected:\n${state.figFiles.map((name) => `- ${name}`).join('\n')}` : 'Figma files selected: none.');
   if (figmaSummaries.length > 0) {
-    sections.push('', `Locally parsed Figma summaries under \`${FIGMA_CONTEXT_ROOT}/\`:`);
+    sections.push('', 'Decoded Figma snapshots (tree + tokens + assets + preview); start from each context brief:');
     sections.push(...figmaSummaries.map((filePath) => `- ${filePath}`));
   } else {
-    sections.push('', `Locally parsed Figma summaries under \`${FIGMA_CONTEXT_ROOT}/\`: none.`);
+    sections.push('', 'Decoded Figma snapshots: none.');
   }
   if (skippedFigma > 0) {
-    sections.push(`${skippedFigma} .fig files were skipped because they were duplicate or outside the focused parse limit.`);
+    sections.push(`${skippedFigma} .fig files were skipped (duplicate or failed to decode).`);
+  }
+  if (state.figmaUrls.length > 0) {
+    sections.push('', 'Figma file URLs (canonical design source references):');
+    sections.push(...state.figmaUrls.map((url) => `- ${url}`));
   }
   sections.push(state.assetFiles.length ? `Fonts, logos, and assets selected:\n${state.assetFiles.map((name) => `- ${name}`).join('\n')}` : 'Fonts, logos, and assets selected: none.');
   if (uploadedAssets.length > 0) {
@@ -3245,7 +5279,7 @@ function buildSourceContextManifest(
     '',
     '## Review Contract',
     '',
-    '- `/design-systems/create` only collected setup inputs. All GitHub extraction, local evidence intake, source reading, design-system construction, package audit, and artifact writes should happen inside this project workspace.',
+    '- `/design-systems/create` only collected setup inputs. All GitHub extraction, website/source URL review, local evidence intake, source reading, design-system construction, package audit, and artifact writes should happen inside this project workspace.',
     '- DESIGN.md is the canonical source of truth.',
     '- Use the canonical design-system title above for headings, README/SKILL names, preview labels, and UI-kit copy unless inspected evidence proves a more accurate product name. Never title the system from URL protocol text such as `https`.',
     '- colors_and_type.css should hold concrete reusable tokens when the source evidence supports them; if fonts/ contains preserved font files, colors_and_type.css must bind those files with @font-face, @import, or url(...) references so typography does not fall back to substitute fonts.',
@@ -3343,10 +5377,12 @@ function githubConnectorStatusForManifest(options: {
 }
 
 function buildProvenance(state: SetupState): DesignSystemProvenance {
+  const sourceUrls = sourceUrlsFromState(state);
   const githubUrls = githubUrlsFromState(state);
   const localCode = localCodeReferences(state);
   return {
     companyBlurb: state.company.trim(),
+    ...(sourceUrls.length ? { sourceUrls } : {}),
     ...(githubUrls.length ? { githubUrls } : {}),
     ...(localCode.length ? { localCodeFiles: localCode } : {}),
     ...(state.figFiles.length ? { figFiles: state.figFiles } : {}),
@@ -3360,6 +5396,7 @@ function provenanceRows(provenance: DesignSystemProvenance | undefined): Array<{
   if (!provenance) return [];
   return [
     provenance.companyBlurb ? { label: 'Company', value: truncateContext(provenance.companyBlurb) } : null,
+    provenance.sourceUrls?.length ? { label: 'Source links', value: provenance.sourceUrls.join(', ') } : null,
     provenance.githubUrls?.length ? { label: 'GitHub', value: provenance.githubUrls.join(', ') } : null,
     provenance.localCodeFiles?.length ? { label: 'Code', value: provenance.localCodeFiles.join(', ') } : null,
     provenance.figFiles?.length ? { label: 'Figma', value: provenance.figFiles.join(', ') } : null,

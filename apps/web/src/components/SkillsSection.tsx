@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import { useT } from '../i18n';
+import { Button } from '@open-design/components';
+import { useI18n, useT, type Locale } from '../i18n';
+import {
+  localizeSkillDescription,
+  localizeSkillName,
+} from '../i18n/content';
 import { Icon } from './Icon';
 import type { AppConfig } from '../types';
 import type { SkillSummary } from '@open-design/contracts';
@@ -30,6 +35,15 @@ import {
 interface Props {
   cfg: AppConfig;
   setCfg: Dispatch<SetStateAction<AppConfig>>;
+  onSkillsRefresh?: () => Promise<void> | void;
+  /**
+   * Fires after every successful skill registry mutation so the App
+   * shell can refresh derived state and evict any preview iframe whose
+   * project depends on the affected skill — body-only edits do not move
+   * any SkillSummary field, so ProjectView's signature-based eviction
+   * cannot see them on its own.
+   */
+  onSkillsChanged?: (affectedSkillId?: string) => void;
 }
 
 type SourceFilter = 'all' | 'user' | 'built-in';
@@ -64,8 +78,16 @@ function parseTriggers(raw: string): string[] {
     .filter(Boolean);
 }
 
-export function SkillsSection({ cfg, setCfg }: Props) {
-  const t = useT();
+function skillMatchesSearch(skill: SkillSummary, q: string, locale: Locale): boolean {
+  if (!q) return true;
+  const hay = `${skill.name}\n${localizeSkillName(locale, skill)}\n${skill.description}\n${localizeSkillDescription(locale, skill)}\n${(skill.triggers ?? []).join(
+    ' ',
+  )}\n${skill.category ?? ''}`;
+  return hay.toLowerCase().includes(q);
+}
+
+export function SkillsSection({ cfg, setCfg, onSkillsRefresh, onSkillsChanged }: Props) {
+  const { locale, t } = useI18n();
 
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [search, setSearch] = useState('');
@@ -126,42 +148,94 @@ export function SkillsSection({ cfg, setCfg }: Props) {
     [cfg.disabledSkills],
   );
 
+  const searchQuery = search.toLowerCase().trim();
+
+  const sourceCounts = useMemo(() => {
+    const counts = new Map<SourceFilter, number>([
+      ['all', 0],
+      ['user', 0],
+      ['built-in', 0],
+    ]);
+    for (const s of skills) {
+      if (modeFilter !== 'all' && s.mode !== modeFilter) continue;
+      if (categoryFilter !== 'all' && s.category !== categoryFilter) continue;
+      if (!skillMatchesSearch(s, searchQuery, locale)) continue;
+      counts.set('all', (counts.get('all') ?? 0) + 1);
+      if (s.source === 'user' || s.source === 'built-in') {
+        counts.set(s.source, (counts.get(s.source) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [skills, modeFilter, categoryFilter, searchQuery, locale]);
+
   const modeOptions = useMemo(() => {
+    const modes = new Set(skills.map((s) => s.mode));
     const counts = new Map<string, number>();
     for (const s of skills) {
+      if (sourceFilter !== 'all' && s.source !== sourceFilter) continue;
+      if (categoryFilter !== 'all' && s.category !== categoryFilter) continue;
+      if (!skillMatchesSearch(s, searchQuery, locale)) continue;
       counts.set(s.mode, (counts.get(s.mode) ?? 0) + 1);
     }
-    return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [skills]);
+    return Array.from(modes, (mode) => [mode, counts.get(mode) ?? 0] as const).sort(
+      (a, b) => a[0].localeCompare(b[0]),
+    );
+  }, [skills, sourceFilter, categoryFilter, searchQuery, locale]);
+
+  const modeAllCount = useMemo(
+    () =>
+      skills.filter((s) => {
+        if (sourceFilter !== 'all' && s.source !== sourceFilter) return false;
+        if (categoryFilter !== 'all' && s.category !== categoryFilter)
+          return false;
+        return skillMatchesSearch(s, searchQuery, locale);
+      }).length,
+    [skills, sourceFilter, categoryFilter, searchQuery, locale],
+  );
 
   // Categories are optional per-skill metadata (`od.category` in the
   // SKILL.md frontmatter). The pill row only renders when at least one
   // skill in the listing carries one, so a project that ships only the
   // baseline functional skills doesn't see an empty filter row.
   const categoryOptions = useMemo(() => {
+    const categories = new Set(
+      skills
+        .map((s) => s.category)
+        .filter((cat): cat is string => typeof cat === 'string' && cat.length > 0),
+    );
     const counts = new Map<string, number>();
     for (const s of skills) {
       const cat = s.category;
       if (typeof cat !== 'string' || !cat) continue;
+      if (modeFilter !== 'all' && s.mode !== modeFilter) continue;
+      if (sourceFilter !== 'all' && s.source !== sourceFilter) continue;
+      if (!skillMatchesSearch(s, searchQuery, locale)) continue;
       counts.set(cat, (counts.get(cat) ?? 0) + 1);
     }
-    return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [skills]);
+    return Array.from(categories, (cat) => [cat, counts.get(cat) ?? 0] as const).sort(
+      (a, b) => a[0].localeCompare(b[0]),
+    );
+  }, [skills, modeFilter, sourceFilter, searchQuery, locale]);
+
+  const categoryAllCount = useMemo(
+    () =>
+      skills.filter((s) => {
+        if (modeFilter !== 'all' && s.mode !== modeFilter) return false;
+        if (sourceFilter !== 'all' && s.source !== sourceFilter) return false;
+        return skillMatchesSearch(s, searchQuery, locale);
+      }).length,
+    [skills, modeFilter, sourceFilter, searchQuery, locale],
+  );
 
   const filteredSkills = useMemo(() => {
-    const q = search.toLowerCase().trim();
     return skills.filter((s) => {
       if (modeFilter !== 'all' && s.mode !== modeFilter) return false;
       if (sourceFilter !== 'all' && s.source !== sourceFilter) return false;
       if (categoryFilter !== 'all' && s.category !== categoryFilter)
         return false;
-      if (!q) return true;
-      const hay = `${s.name}\n${s.description}\n${(s.triggers ?? []).join(
-        ' ',
-      )}\n${s.category ?? ''}`;
-      return hay.toLowerCase().includes(q);
+      return skillMatchesSearch(s, searchQuery, locale);
     });
-  }, [skills, modeFilter, sourceFilter, categoryFilter, search]);
+  }, [skills, modeFilter, sourceFilter, categoryFilter, searchQuery, locale]);
 
   const ensureBody = useCallback(
     async (id: string) => {
@@ -288,6 +362,7 @@ export function SkillsSection({ cfg, setCfg }: Props) {
     }
     const updated = result.skill;
     await refresh();
+    await onSkillsRefresh?.();
     setBodyById((cur) => ({ ...cur, [updated.id]: body }));
     // Drop the cached file tree for this id so the next expand
     // re-walks the on-disk folder; SKILL.md may have been the only
@@ -301,7 +376,8 @@ export function SkillsSection({ cfg, setCfg }: Props) {
     setEditingId(null);
     setCreating(false);
     setDraft(EMPTY_DRAFT);
-  }, [draft, draftSaving, editingId, refresh]);
+    onSkillsChanged?.(updated.id);
+  }, [draft, draftSaving, editingId, onSkillsChanged, onSkillsRefresh, refresh]);
 
   const armDelete = useCallback((id: string) => {
     setConfirmDeleteId(id);
@@ -320,6 +396,7 @@ export function SkillsSection({ cfg, setCfg }: Props) {
       }
       setConfirmDeleteId(null);
       await refresh();
+      await onSkillsRefresh?.();
       setBodyById((cur) => {
         const next = { ...cur };
         delete next[id];
@@ -342,8 +419,9 @@ export function SkillsSection({ cfg, setCfg }: Props) {
         setEditingId(null);
         setDraft(EMPTY_DRAFT);
       }
+      onSkillsChanged?.(id);
     },
-    [editingId, expandedId, refresh, setCfg],
+    [editingId, expandedId, onSkillsChanged, onSkillsRefresh, refresh, setCfg],
   );
 
   const toggleEnabled = useCallback(
@@ -390,10 +468,10 @@ export function SkillsSection({ cfg, setCfg }: Props) {
               onChange={(e) => setSourceFilter(e.target.value as SourceFilter)}
             >
               <option value="all">
-                {t('settings.libraryAll')} ({skills.length})
+                {t('settings.libraryAll')} ({sourceCounts.get('all') ?? 0})
               </option>
               {(['user', 'built-in'] as const).map((s) => {
-                const count = skills.filter((sk) => sk.source === s).length;
+                const count = sourceCounts.get(s) ?? 0;
                 return (
                   <option key={s} value={s}>
                     {s} ({count})
@@ -410,7 +488,7 @@ export function SkillsSection({ cfg, setCfg }: Props) {
               onChange={(e) => setModeFilter(e.target.value)}
             >
               <option value="all">
-                {t('settings.libraryAll')} ({skills.length})
+                {t('settings.libraryAll')} ({modeAllCount})
               </option>
               {modeOptions.map(([mode, count]) => (
                 <option key={mode} value={mode}>
@@ -431,7 +509,7 @@ export function SkillsSection({ cfg, setCfg }: Props) {
                 onChange={(e) => setCategoryFilter(e.target.value)}
               >
                 <option value="all">
-                  {t('settings.libraryAll')} ({skills.length})
+                  {t('settings.libraryAll')} ({categoryAllCount})
                 </option>
                 {categoryOptions.map(([cat, count]) => (
                   <option key={cat} value={cat}>
@@ -558,8 +636,14 @@ function SkillRow({
   onSubmitEdit,
 }: SkillRowProps) {
   const t = useT();
-  const summaryName = skill.name || skill.id;
+  const { locale } = useI18n();
+  const summaryName = localizeSkillName(locale, skill) || skill.id;
+  const summaryDescription = localizeSkillDescription(locale, skill);
   const canDelete = skill.source === 'user';
+  // Editing a built-in skill does not modify it in place — it writes a
+  // user-owned shadow copy. Frame the affordance as creating a user override
+  // so the built-in → user transition is not a surprise.
+  const isBuiltIn = skill.source !== 'user';
   return (
     <div
       className={`skills-row${enabled ? '' : ' skills-row-disabled'}${
@@ -599,8 +683,8 @@ function SkillRow({
                 </span>
               ) : null}
             </span>
-            {skill.description ? (
-              <span className="skills-row-summary-desc">{skill.description}</span>
+            {summaryDescription ? (
+              <span className="skills-row-summary-desc">{summaryDescription}</span>
             ) : null}
           </span>
           <span className="skills-row-chevron" aria-hidden>
@@ -628,25 +712,27 @@ function SkillRow({
             </span>
           ) : (
             <>
-              <button
-                type="button"
-                className="icon-btn"
+              <Button
+                size="icon"
                 onClick={onStartEdit}
-                title={t('settings.skillsEdit')}
+                title={
+                  isBuiltIn
+                    ? t('settings.skillsOverrideCreate')
+                    : t('settings.skillsEdit')
+                }
                 data-testid="skills-edit"
               >
                 <Icon name="edit" size={13} />
-              </button>
+              </Button>
               {canDelete ? (
-                <button
-                  type="button"
-                  className="icon-btn"
+                <Button
+                  size="icon"
                   onClick={onArmDelete}
                   title={t('settings.skillsDelete')}
                   data-testid="skills-delete"
                 >
                   <Icon name="close" size={13} />
-                </button>
+                </Button>
               ) : null}
             </>
           )}
@@ -671,11 +757,7 @@ function SkillRow({
           role="alert"
           data-testid="skills-edit-builtin-warning"
         >
-          <p>
-            Editing this built-in skill creates a user override. The built-in
-            entry will be hidden from the list until you delete the override.
-            Continue?
-          </p>
+          <p>{t('settings.skillsBuiltInOverrideWarning')}</p>
           <div className="skills-edit-builtin-actions">
             <button
               type="button"
@@ -691,7 +773,7 @@ function SkillRow({
               onClick={onConfirmBuiltInEdit}
               data-testid="skills-edit-builtin-confirm"
             >
-              {t('settings.skillsEdit')}
+              {t('settings.skillsOverrideCreate')}
             </button>
           </div>
         </div>
@@ -741,13 +823,18 @@ function SkillRow({
 
       {editing && draft ? (
         <SkillDraftForm
-          heading={t('settings.skillsEdit')}
+          heading={
+            isBuiltIn
+              ? t('settings.skillsOverrideCreate')
+              : t('settings.skillsEdit')
+          }
           subheading={skill.id}
           draft={draft}
           setDraft={setDraft}
           error={draftError}
           saving={draftSaving}
           isEdit
+          isBuiltInOverride={isBuiltIn}
           onCancel={onCancelEdit}
           onSubmit={onSubmitEdit}
         />
@@ -764,6 +851,8 @@ interface SkillDraftFormProps {
   error: string | null;
   saving: boolean;
   isEdit: boolean;
+  /** Editing a built-in skill: the submit reads "Save as user override". */
+  isBuiltInOverride?: boolean;
   onCancel: () => void;
   onSubmit: () => void;
 }
@@ -776,6 +865,7 @@ function SkillDraftForm({
   error,
   saving,
   isEdit,
+  isBuiltInOverride = false,
   onCancel,
   onSubmit,
 }: SkillDraftFormProps) {
@@ -858,7 +948,9 @@ function SkillDraftForm({
           {saving
             ? t('settings.skillsSaving')
             : isEdit
-              ? t('settings.skillsSave')
+              ? isBuiltInOverride
+                ? t('settings.skillsOverrideSave')
+                : t('settings.skillsSave')
               : t('settings.skillsCreate')}
         </button>
       </div>

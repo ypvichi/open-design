@@ -29,12 +29,15 @@ import type { AudioKind, MediaAspect } from '../types';
  */
 export type MediaProviderId =
   | 'openai'
+  | 'codex'
   | 'volcengine'
   | 'grok'
   | 'hyperframes'
   | 'nanobanana'
   | 'imagerouter'
+  | 'openrouter'
   | 'custom-image'
+  | 'comfyui'
   | 'bfl'
   | 'fal'
   | 'replicate'
@@ -47,6 +50,7 @@ export type MediaProviderId =
   | 'elevenlabs'
   | 'fishaudio'
   | 'senseaudio'
+  | 'aihubmix'
   | 'tavily'
   | 'leonardo'
   | 'stub';
@@ -87,6 +91,14 @@ export const MEDIA_PROVIDERS: MediaProvider[] = [
     integrated: true,
     defaultBaseUrl: 'https://api.openai.com/v1',
     docsUrl: 'https://platform.openai.com/api-keys',
+  },
+  {
+    id: 'codex',
+    label: 'Codex Subscription',
+    hint: 'gpt-image-2 via local Codex CLI login',
+    integrated: true,
+    credentialsRequired: false,
+    docsUrl: 'https://developers.openai.com/codex',
   },
   {
     id: 'volcengine',
@@ -133,13 +145,31 @@ export const MEDIA_PROVIDERS: MediaProvider[] = [
     customModelPlaceholder: 'openai/gpt-image-2 or xAI/grok-imagine-video',
   },
   {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    hint: 'Unified gateway for image + video models',
+    integrated: true,
+    credentialsRequired: true,
+    settingsVisible: true,
+    defaultBaseUrl: 'https://openrouter.ai/api/v1',
+    docsUrl: 'https://openrouter.ai/settings/keys',
+  },
+  {
     id: 'custom-image',
     label: 'Custom Image API',
-    hint: 'OpenAI-compatible /v1/images/generations endpoint',
+    hint: 'OpenAI-compatible images/generations + images/edits (local or cloud)',
     integrated: true,
     docsUrl: 'https://platform.openai.com/docs/api-reference/images',
     supportsCustomModel: true,
     customModelPlaceholder: 'my-image-model',
+  },
+  {
+    id: 'comfyui',
+    label: 'ComfyUI',
+    hint: 'Local JSON workflow server (planned adapter)',
+    integrated: false,
+    defaultBaseUrl: 'http://127.0.0.1:8188',
+    docsUrl: 'https://docs.comfy.org/development/core-concepts/workflow',
   },
   {
     id: 'bfl',
@@ -152,10 +182,11 @@ export const MEDIA_PROVIDERS: MediaProvider[] = [
   {
     id: 'fal',
     label: 'Fal.ai',
-    hint: 'Sora / Seedance / Veo / FLUX',
-    integrated: false,
+    hint: 'FLUX / Sora / Veo / Wan / Ideogram / Recraft and any fal-ai/* model',
+    integrated: true,
     defaultBaseUrl: 'https://fal.run',
     docsUrl: 'https://fal.ai/dashboard/keys',
+    supportsCustomModel: true,
   },
   {
     id: 'leonardo',
@@ -198,7 +229,7 @@ export const MEDIA_PROVIDERS: MediaProvider[] = [
   {
     id: 'minimax',
     label: 'MiniMax',
-    hint: 'TTS / video-01',
+    hint: 'TTS / image-01 / video-01',
     integrated: true,
     defaultBaseUrl: 'https://api.minimaxi.chat/v1',
     docsUrl: 'https://platform.minimaxi.com',
@@ -238,6 +269,18 @@ export const MEDIA_PROVIDERS: MediaProvider[] = [
     integrated: true,
     defaultBaseUrl: 'https://api.senseaudio.cn',
     docsUrl: 'https://docs.senseaudio.cn',
+  },
+  {
+    id: 'aihubmix',
+    label: 'AIHubMix',
+    hint: 'OpenAI-compatible aggregator · image + speech',
+    integrated: true,
+    credentialsRequired: true,
+    settingsVisible: true,
+    defaultBaseUrl: 'https://aihubmix.com/v1',
+    docsUrl: 'https://docs.aihubmix.com',
+    supportsCustomModel: true,
+    customModelPlaceholder: 'gpt-image-1 or dall-e-3',
   },
   {
     id: 'tavily',
@@ -327,6 +370,13 @@ export const IMAGE_MODELS: MediaModel[] = [
     provider: 'openai',
     caps: ['t2i'],
   },
+  {
+    id: 'codex-gpt-image-2',
+    label: 'gpt-image-2 (Codex)',
+    hint: 'Codex Subscription · local CLI imagegen',
+    provider: 'codex',
+    caps: ['t2i', 'i2i'],
+  },
 
   // Volcengine — Doubao Seedream image generation.
   {
@@ -364,6 +414,35 @@ export const IMAGE_MODELS: MediaModel[] = [
     label: 'seedream-5.0',
     hint: 'SenseAudio · ByteDance Seedream 5.0 hi-res',
     provider: 'senseaudio',
+    caps: ['t2i', 'i2i'],
+  },
+
+  // AIHubMix — OpenAI-compatible /v1/images/generations. Prefixed ids stay
+  // unique against the openai-provider entries; the prefix is stripped to the
+  // real wire name daemon-side.
+  {
+    id: 'aihubmix-gpt-image-1',
+    label: 'gpt-image-1 (AIHubMix)',
+    hint: 'AIHubMix · OpenAI gpt-image-1',
+    provider: 'aihubmix',
+    caps: ['t2i', 'i2i'],
+  },
+  {
+    id: 'aihubmix-dall-e-3',
+    label: 'dall-e-3 (AIHubMix)',
+    hint: 'AIHubMix · OpenAI DALL·E 3',
+    provider: 'aihubmix',
+    caps: ['t2i'],
+  },
+
+  // MiniMax — synchronous /v1/image_generation, Bearer auth, base_resp envelope.
+  // The wire name `image-01` is mapped from the catalog id `minimax-image-01` in
+  // the renderer (see MINIMAX_IMAGE_MODEL_MAP in apps/daemon/src/media.ts).
+  {
+    id: 'minimax-image-01',
+    label: 'image-01',
+    hint: 'MiniMax · text + image-to-image',
+    provider: 'minimax',
     caps: ['t2i', 'i2i'],
   },
 
@@ -408,13 +487,18 @@ export const IMAGE_MODELS: MediaModel[] = [
     caps: ['t2i'],
   },
 
-  // Custom OpenAI-compatible /v1/images/generations endpoint.
+  // OpenRouter image models.
+  { id: 'openrouter/google/gemini-2.5-flash-image', label: 'gemini-flash-image (OR)', hint: 'OpenRouter · Gemini', provider: 'openrouter', caps: ['t2i'] },
+  { id: 'openrouter/black-forest-labs/flux-1.1-pro', label: 'flux-1.1-pro (OR)', hint: 'OpenRouter · BFL', provider: 'openrouter', caps: ['t2i'] },
+  { id: 'openrouter/recraft/recraft-v3', label: 'recraft-v3 (OR)', hint: 'OpenRouter · Recraft', provider: 'openrouter', caps: ['t2i'] },
+
+  // Custom OpenAI-compatible image generation + edit endpoints.
   {
     id: 'custom-image',
     label: 'custom-image',
     hint: 'Custom · OpenAI-compatible endpoint',
     provider: 'custom-image',
-    caps: ['t2i'],
+    caps: ['t2i', 'i2i'],
   },
 
   // Black Forest Labs FLUX family.
@@ -429,9 +513,16 @@ export const IMAGE_MODELS: MediaModel[] = [
   { id: 'imagen-3', label: 'imagen-3', hint: 'Google', provider: 'google', caps: ['t2i'] },
   { id: 'gemini-3-pro-image-preview', label: 'gemini-3-pro-image', hint: 'Google · Nano Banana Pro', provider: 'google', caps: ['t2i', 'i2i'] },
 
-  // Replicate / Fal hosted image models.
+  // Replicate hosted image models.
   { id: 'ideogram-v2', label: 'ideogram-v2', hint: 'Replicate · typography', provider: 'replicate', caps: ['t2i'] },
   { id: 'sdxl', label: 'stable-diffusion-xl', hint: 'Replicate · SDXL', provider: 'replicate', caps: ['t2i'] },
+
+  // Fal.ai image models — pass any fal-ai/* path as model for custom models.
+  { id: 'flux-pro-ultra', label: 'flux-pro-ultra', hint: 'Fal · FLUX 1.1 Pro Ultra · highest quality', provider: 'fal', caps: ['t2i'] },
+  { id: 'flux-dev-fal', label: 'flux-dev (fal)', hint: 'Fal · FLUX Dev · open weights', provider: 'fal', caps: ['t2i'] },
+  { id: 'flux-schnell-fal', label: 'flux-schnell (fal)', hint: 'Fal · FLUX Schnell · fastest / cheapest', provider: 'fal', caps: ['t2i'] },
+  { id: 'ideogram-v3-fal', label: 'ideogram-v3', hint: 'Fal · Ideogram v3 · typography + design', provider: 'fal', caps: ['t2i'] },
+  { id: 'recraft-v3-fal', label: 'recraft-v3', hint: 'Fal · Recraft v3 · vector + illustration', provider: 'fal', caps: ['t2i'] },
   { id: 'sd-3.5', label: 'stable-diffusion-3.5', hint: 'Fal · SD 3.5', provider: 'fal', caps: ['t2i'] },
 
   // Leonardo.ai models
@@ -497,6 +588,14 @@ export const VIDEO_MODELS: MediaModel[] = [
     caps: ['t2v', 'i2v', 'audio'],
   },
 
+  // OpenRouter video models.
+  { id: 'openrouter/bytedance/seedance-2.0:1080p', label: 'seedance-2.0 1080p (OR)', hint: 'OpenRouter · ByteDance · 1080p', provider: 'openrouter', caps: ['t2v', 'i2v'], default: true },
+  { id: 'openrouter/bytedance/seedance-2.0', label: 'seedance-2.0 720p (OR)', hint: 'OpenRouter · ByteDance · 720p', provider: 'openrouter', caps: ['t2v', 'i2v'] },
+  { id: 'openrouter/bytedance/seedance-2.0:480p', label: 'seedance-2.0 480p (OR)', hint: 'OpenRouter · ByteDance · 480p', provider: 'openrouter', caps: ['t2v', 'i2v'] },
+  { id: 'openrouter/google/veo-3.1', label: 'veo-3.1 (OR)', hint: 'OpenRouter · Google', provider: 'openrouter', caps: ['t2v', 'i2v', 'audio'] },
+  { id: 'openrouter/alibaba/wan-2.7', label: 'wan-2.7 (OR)', hint: 'OpenRouter · Alibaba', provider: 'openrouter', caps: ['t2v', 'i2v'] },
+  { id: 'openrouter/kwaivgi/kling-v3.0-pro', label: 'kling-v3.0-pro (OR)', hint: 'OpenRouter · Kuaishou', provider: 'openrouter', caps: ['t2v', 'i2v'] },
+
   // ImageRouter — routed video models.
   {
     id: 'xAI/grok-imagine-video',
@@ -529,9 +628,15 @@ export const VIDEO_MODELS: MediaModel[] = [
   { id: 'veo-3', label: 'veo-3', hint: 'Google · sound-on', provider: 'google', caps: ['t2v', 'audio'] },
   { id: 'veo-2', label: 'veo-2', hint: 'Google', provider: 'google', caps: ['t2v'] },
 
-  // OpenAI Sora (via Fal hosting today).
-  { id: 'sora-2', label: 'sora-2', hint: 'OpenAI · via Fal', provider: 'fal', caps: ['t2v'] },
-  { id: 'sora-2-pro', label: 'sora-2-pro', hint: 'OpenAI · via Fal', provider: 'fal', caps: ['t2v'] },
+  // Fal.ai video models — pass any fal-ai/* path as model for custom models.
+  { id: 'veo-3-fal', label: 'veo-3 (fal)', hint: 'Fal · Google Veo 3 · sound-on', provider: 'fal', caps: ['t2v', 'audio'] },
+  { id: 'veo-2-fal', label: 'veo-2 (fal)', hint: 'Fal · Google Veo 2', provider: 'fal', caps: ['t2v'] },
+  { id: 'wan-2.1-t2v', label: 'wan-2.1-t2v', hint: 'Fal · Wan 2.1 text-to-video', provider: 'fal', caps: ['t2v'] },
+  { id: 'wan-2.1-i2v', label: 'wan-2.1-i2v', hint: 'Fal · Wan 2.1 image-to-video', provider: 'fal', caps: ['i2v'] },
+  { id: 'seedance-1-pro-fal', label: 'seedance-1-pro (fal)', hint: 'Fal · Seedance 1 Pro', provider: 'fal', caps: ['t2v', 'i2v'] },
+  { id: 'kling-2.1-t2v-fal', label: 'kling-2.1 (fal)', hint: 'Fal · Kling 2.1 Pro text-to-video', provider: 'fal', caps: ['t2v'] },
+  { id: 'sora-2', label: 'sora-2', hint: 'Fal · OpenAI Sora 2', provider: 'fal', caps: ['t2v'] },
+  { id: 'sora-2-pro', label: 'sora-2-pro', hint: 'Fal · OpenAI Sora 2 Pro', provider: 'fal', caps: ['t2v'] },
 
   // MiniMax video.
   { id: 'minimax-video-01', label: 'video-01', hint: 'MiniMax · Hailuo', provider: 'minimax', caps: ['t2v', 'i2v'] },
@@ -552,6 +657,7 @@ export const AUDIO_MODELS_BY_KIND: Record<AudioKind, MediaModel[]> = {
     { id: 'senseaudio-tts', label: 'senseaudio-tts', hint: 'SenseAudio', provider: 'senseaudio', caps: ['tts', 'voice-clone'] },
     { id: 'doubao-tts', label: 'doubao-tts', hint: 'Volcengine', provider: 'volcengine', caps: ['tts'] },
     { id: 'gpt-4o-mini-tts', label: 'gpt-4o-mini-tts', hint: 'OpenAI', provider: 'openai', caps: ['tts'] },
+    { id: 'aihubmix-tts-1', label: 'tts-1 (AIHubMix)', hint: 'AIHubMix · OpenAI tts-1', provider: 'aihubmix', caps: ['tts'] },
   ],
   sfx: [
     { id: 'elevenlabs-sfx', label: 'elevenlabs-sfx', hint: 'ElevenLabs SFX', provider: 'elevenlabs', caps: ['sfx'], default: true },
@@ -598,6 +704,17 @@ export function findMediaModel(id: string): MediaModel | null {
 
 export function findProvider(id: MediaProviderId): MediaProvider | null {
   return MEDIA_PROVIDERS.find((p) => p.id === id) ?? null;
+}
+
+/**
+ * Resolve the provider that owns a model id. Live AIHubMix catalogue ids are
+ * `aihubmix-` prefixed and absent from the static registry, so match that
+ * namespace first; every other id resolves through {@link findMediaModel}.
+ * Returns undefined for unknown ids.
+ */
+export function mediaModelProviderId(id: string): MediaProviderId | undefined {
+  if (id.startsWith('aihubmix-')) return 'aihubmix';
+  return findMediaModel(id)?.provider;
 }
 
 /** All model IDs grouped by surface, used for prompt-side disclosure. */

@@ -35,6 +35,7 @@ const voiceForm: QuestionForm = {
       label: 'Voice',
       type: 'select',
       required: true,
+      allowCustom: false,
       placeholder: 'Choose a voice',
       help: 'Select a voice description; the answer submits the matching Voice ID.',
       options: [
@@ -141,6 +142,7 @@ describe('QuestionFormView', () => {
     expect(container.querySelector('option[value="21m00Tcm4TlvDq8ikWAM"]')?.textContent).toBe(
       'Rachel — american · female',
     );
+    expect(screen.queryByLabelText('Custom answer')).toBeNull();
 
     fireEvent.change(select, { target: { value: '21m00Tcm4TlvDq8ikWAM' } });
     fireEvent.click(screen.getByRole('button', { name: 'Use voice' }));
@@ -195,6 +197,50 @@ describe('QuestionFormView', () => {
     expect(onSubmit.mock.calls[0]?.[1]).toEqual({ platform: 'mobile' });
   });
 
+  it('lets users override generated radio options with a custom answer', () => {
+    const onSubmit = vi.fn();
+    render(<QuestionFormView form={richForm} interactive onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText('Custom answer'), {
+      target: { value: 'Wearable kiosk' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send answers' }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.stringContaining('- Primary surface: Wearable kiosk'),
+      { platform: 'Wearable kiosk' },
+    );
+  });
+
+  it('combines checkbox presets with custom user entries', () => {
+    const onSubmit = vi.fn();
+    render(<QuestionFormView form={checkboxObjectForm} interactive onSubmit={onSubmit} />);
+
+    fireEvent.click(screen.getByLabelText('Editorial / magazine'));
+    fireEvent.change(screen.getByLabelText('Custom answer'), {
+      target: { value: 'Neo-museum, Field notebook' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send answers' }));
+
+    expect(onSubmit.mock.calls[0]?.[0]).toContain('Editorial / magazine [value: editorial]');
+    expect(onSubmit.mock.calls[0]?.[0]).toContain('Neo-museum');
+    expect(onSubmit.mock.calls[0]?.[0]).toContain('Field notebook');
+    expect(onSubmit.mock.calls[0]?.[1]).toEqual({
+      tone: ['editorial', 'Neo-museum', 'Field notebook'],
+    });
+  });
+
+  it('can hide custom choice input for exact machine-id pickers', () => {
+    const exactForm = {
+      ...selectObjectForm,
+      questions: [{ ...selectObjectForm.questions[0], allowCustom: false }],
+    } as QuestionForm;
+
+    render(<QuestionFormView form={exactForm} interactive onSubmit={vi.fn()} />);
+
+    expect(screen.queryByLabelText('Custom answer')).toBeNull();
+  });
+
   it('submits required checkbox object options with stable values', () => {
     const onSubmit = vi.fn();
     const { container } = render(
@@ -202,6 +248,9 @@ describe('QuestionFormView', () => {
     );
 
     const submit = screen.getByRole('button', { name: 'Send answers' });
+    // Required field unanswered → submit stays disabled (regression guard:
+    // the Questions-tab refactor must not make required fields optional on the
+    // standard submit path).
     expect((submit as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.click(screen.getByLabelText('Editorial / magazine'));
@@ -220,6 +269,32 @@ describe('QuestionFormView', () => {
     });
   });
 
+  it('marks required fields with the inline indicator even when the footer is hidden', () => {
+    // Panel path (Questions tab): hideInternalSubmit hides the form footer, so
+    // the inline "*" next to a required label is the only per-field cue that a
+    // field is mandatory. A mixed required/optional form must still advertise
+    // which fields block the disabled Continue button.
+    const mixedForm = {
+      id: 'discovery',
+      title: 'Quick brief',
+      questions: [
+        { id: 'taskType', label: 'Task type', type: 'text', required: true },
+        { id: 'notes', label: 'Notes', type: 'text' },
+      ],
+    } as QuestionForm;
+
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <QuestionFormView form={mixedForm} interactive hideInternalSubmit onSubmit={onSubmit} />,
+    );
+
+    const fields = container.querySelectorAll('.qf-field');
+    const requiredField = fields[0]!;
+    const optionalField = fields[1]!;
+    expect(requiredField.querySelector('.qf-required')?.textContent).toBe('*');
+    expect(optionalField.querySelector('.qf-required')).toBeNull();
+  });
+
   it('submits required select object options with stable values', () => {
     const onSubmit = vi.fn();
     const { container } = render(
@@ -227,6 +302,7 @@ describe('QuestionFormView', () => {
     );
 
     const submit = screen.getByRole('button', { name: 'Send answers' });
+    // Required select unanswered → submit stays disabled (regression guard).
     expect((submit as HTMLButtonElement).disabled).toBe(true);
 
     const select = container.querySelector('select');
@@ -241,5 +317,78 @@ describe('QuestionFormView', () => {
       '- Primary surface: Mobile (iOS/Android) [value: mobile]',
     );
     expect(onSubmit.mock.calls[0]?.[1]).toEqual({ platform: 'mobile' });
+  });
+
+  it('submits native defaults for required color and defaultless range controls', () => {
+    const nativeDefaultsForm = {
+      id: 'native-defaults',
+      title: 'Native defaults',
+      questions: [
+        { id: 'accent', label: 'Accent color', type: 'color', required: true },
+        { id: 'weight', label: 'Weight', type: 'range', required: true, max: 10 },
+      ],
+    } as QuestionForm;
+    const onSubmit = vi.fn();
+    render(<QuestionFormView form={nativeDefaultsForm} interactive onSubmit={onSubmit} />);
+
+    const submit = screen.getByRole('button', { name: 'Send answers' }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(false);
+
+    fireEvent.click(submit);
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      [
+        '[form answers — native-defaults]',
+        '- Accent color: #000000',
+        '- Weight: 0',
+      ].join('\n'),
+      { accent: '#000000', weight: '0' },
+    );
+  });
+
+  it('submits selected file objects without persisting file names as drafts', () => {
+    const fileForm = {
+      id: 'references',
+      title: 'References',
+      questions: [
+        {
+          id: 'assets',
+          label: 'Reference assets',
+          type: 'file',
+          multiple: true,
+          accept: 'image/*,.pdf',
+          required: true,
+        },
+      ],
+    } as QuestionForm;
+    const onSubmit = vi.fn();
+    const onDraftChange = vi.fn();
+    const { container } = render(
+      <QuestionFormView
+        form={fileForm}
+        interactive
+        onSubmit={onSubmit}
+        onDraftChange={onDraftChange}
+      />,
+    );
+
+    const submit = screen.getByRole('button', { name: 'Send answers' }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    if (!input) throw new Error('expected file input');
+    const first = new File(['a'], 'mood.png', { type: 'image/png' });
+    const second = new File(['b'], 'brief.pdf', { type: 'application/pdf' });
+    fireEvent.change(input, { target: { files: [first, second] } });
+
+    expect(onDraftChange).toHaveBeenLastCalledWith({});
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      '[form answers — references]\n- Reference assets: mood.png, brief.pdf',
+      { assets: ['mood.png', 'brief.pdf'] },
+      [{ questionId: 'assets', questionLabel: 'Reference assets', files: [first, second] }],
+    );
   });
 });

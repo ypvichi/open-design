@@ -1,11 +1,29 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os, { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import process from "node:process";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ToolPackConfig } from "../src/config.js";
+import {
+  copyResourceTree,
+  createMacElectronRebuildOptions,
+  renderMacPackagedConfig,
+  validateMacNativeRebuildOutput,
+} from "../src/mac/app.js";
+import { runElectronBuilder } from "../src/mac/builder.js";
 import { resolveSeededAppConfigPaths, seedPackagedAppConfig, writeLaunchPackagedConfig } from "../src/mac/index.js";
+import { resolveMacPaths } from "../src/mac/paths.js";
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function makeConfig(root: string, overrides: Partial<ToolPackConfig> = {}): ToolPackConfig {
   return {
@@ -21,6 +39,7 @@ function makeConfig(root: string, overrides: Partial<ToolPackConfig> = {}): Tool
     removeLogs: false,
     removeProductUserData: false,
     removeSidecars: false,
+    requireVelaCli: false,
     roots: {
       output: {
         appBuilderRoot: join(root, ".tmp", "tools-pack", "out", "mac", "namespaces", "local-test", "builder"),
@@ -127,6 +146,188 @@ describe("seedPackagedAppConfig", () => {
       await expect(
         readFile(join(config.roots.runtime.namespaceRoot, "data", "app-config.json"), "utf8"),
       ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("copyResourceTree", () => {
+  it("does not embed the build machine Node launcher into mac resources", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const config = makeConfig(root);
+      const paths = resolveMacPaths(config);
+      const resourceNames = [
+        "skills",
+        "design-templates",
+        "design-systems",
+        "craft",
+        "plugins/_official",
+        "plugins/registry",
+        "assets/frames",
+        "assets/community-pets",
+        "prompt-templates",
+        "data/plugin-previews",
+      ];
+
+      for (const name of resourceNames) {
+        await mkdir(join(root, name), { recursive: true });
+      }
+
+      await copyResourceTree(config, paths);
+
+      expect(await pathExists(join(paths.resourceRoot, "bin", "node"))).toBe(false);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("renderMacPackagedConfig", () => {
+  it("omits nodeCommandRelative so packaged mac sidecars use Electron as Node", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const config = makeConfig(root);
+
+      const packagedConfig = JSON.parse(
+        renderMacPackagedConfig({
+          appVersion: "1.2.3",
+          config,
+          usePrebundledStandaloneWeb: true,
+        }),
+      ) as Record<string, unknown>;
+      expect(packagedConfig).not.toHaveProperty("nodeCommandRelative");
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("bakes the configured updater metadata URL for mac beta validation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const config = makeConfig(root, {
+        updateMetadataUrl: "http://127.0.0.1:4567/beta/latest/metadata.json",
+      });
+
+      const packagedConfig = JSON.parse(
+        renderMacPackagedConfig({
+          appVersion: "1.2.3-beta.0",
+          config,
+          usePrebundledStandaloneWeb: true,
+        }),
+      ) as Record<string, unknown>;
+
+      expect(packagedConfig.updateMetadataUrl).toBe("http://127.0.0.1:4567/beta/latest/metadata.json");
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("runElectronBuilder", () => {
+  async function prepareElectronBuilderConfig(root: string, overrides: Partial<ToolPackConfig>) {
+    const cliPath = join(root, "fake-electron-builder.mjs");
+    await writeFile(cliPath, "process.exit(0);\n", "utf8");
+
+    const config = makeConfig(root, {
+      appVersion: "1.2.3-prerelease.4",
+      electronBuilderCliPath: cliPath,
+      signed: true,
+      webOutputMode: "server",
+      ...overrides,
+    });
+    const paths = resolveMacPaths(config);
+
+    await runElectronBuilder(config, paths, ["dir"]);
+
+    return JSON.parse(await readFile(paths.appBuilderConfigPath, "utf8")) as {
+      afterSign?: string;
+      mac?: {
+        notarize?: boolean;
+      };
+    };
+  }
+
+  it("does not explicitly disable electron-builder notarization for notarized mac builds", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const builderConfig = await prepareElectronBuilderConfig(root, { macNotarize: true });
+
+      expect(builderConfig.afterSign).toContain("notarize.cjs");
+      expect(builderConfig.mac).not.toHaveProperty("notarize");
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps signed-only mac builds from invoking electron-builder notarization", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const builderConfig = await prepareElectronBuilderConfig(root, { macNotarize: false });
+
+      expect(builderConfig.afterSign).toBeUndefined();
+      expect(builderConfig.mac?.notarize).toBe(false);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("createMacElectronRebuildOptions", () => {
+  it("targets the packaged Electron ABI for required native modules", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const config = makeConfig(root, { electronVersion: "41.3.0" });
+      const appRoot = join(root, "assembled", "app");
+
+      expect(createMacElectronRebuildOptions(config, appRoot)).toMatchObject({
+        arch: process.arch,
+        buildFromSource: false,
+        buildPath: appRoot,
+        electronVersion: "41.3.0",
+        force: true,
+        mode: "sequential",
+        onlyModules: ["better-sqlite3"],
+        platform: "darwin",
+        projectRootPath: appRoot,
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("validateMacNativeRebuildOutput", () => {
+  it("reports a missing rebuilt native module as missing output", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      await expect(validateMacNativeRebuildOutput(root)).resolves.toBe(
+        `native module output is missing: ${join(root, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node")}`,
+      );
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("preserves non-ENOENT filesystem diagnostics from stat failures", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const buildPath = join(root, "node_modules", "better-sqlite3", "build");
+      const nativePath = join(buildPath, "Release", "better_sqlite3.node");
+      await mkdir(dirname(buildPath), { recursive: true });
+      await writeFile(buildPath, "not a directory", "utf8");
+
+      const result = await validateMacNativeRebuildOutput(root);
+      if (process.platform === "win32") {
+        await expect(Promise.resolve(result)).resolves.toBe(
+          `native module output is missing: ${nativePath}`,
+        );
+      } else {
+        await expect(Promise.resolve(result)).resolves.toContain(
+          `native module output could not be inspected: ${nativePath}: ENOTDIR: not a directory, stat '${nativePath}'`,
+        );
+      }
     } finally {
       await rm(root, { force: true, recursive: true });
     }

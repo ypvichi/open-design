@@ -5,7 +5,7 @@
 //      OD_API_TOKEN is set.
 //   2. When OD_API_TOKEN is set, every /api/* request from a non-loopback
 //      peer must carry `Authorization: Bearer <OD_API_TOKEN>`. The
-//      health/version/status probes stay open for monitoring.
+//      health/readiness/version probes stay open for monitoring.
 //
 // Tests force the bearer-required code path by stamping the env vars
 // before startServer. The daemon listens on 127.0.0.1 throughout (so
@@ -14,10 +14,12 @@
 
 import type http from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { isApiAuthDisabled, isApiTokenMiddlewareEnabled } from '../src/api-token-auth.js';
 import { startServer } from '../src/server.js';
 
 const PREVIOUS_TOKEN = process.env.OD_API_TOKEN;
 const PREVIOUS_HOST  = process.env.OD_BIND_HOST;
+const PREVIOUS_DISABLE_API_AUTH = process.env.OD_DISABLE_API_AUTH;
 
 let server: http.Server | undefined;
 let baseUrl = '';
@@ -32,6 +34,8 @@ afterEach(async () => {
   else process.env.OD_API_TOKEN = PREVIOUS_TOKEN;
   if (PREVIOUS_HOST === undefined) delete process.env.OD_BIND_HOST;
   else process.env.OD_BIND_HOST = PREVIOUS_HOST;
+  if (PREVIOUS_DISABLE_API_AUTH === undefined) delete process.env.OD_DISABLE_API_AUTH;
+  else process.env.OD_DISABLE_API_AUTH = PREVIOUS_DISABLE_API_AUTH;
 });
 
 describe('bound-API-token guard', () => {
@@ -55,6 +59,17 @@ describe('bound-API-token guard', () => {
     baseUrl = started.url;
     expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
   });
+
+  it('starts on a public host without OD_API_TOKEN when OD_DISABLE_API_AUTH=1', async () => {
+    delete process.env.OD_API_TOKEN;
+    process.env.OD_DISABLE_API_AUTH = '1';
+    const started = (await startServer({ port: 0, host: '0.0.0.0', returnServer: true })) as {
+      server: http.Server;
+      shutdown?: () => Promise<void> | void;
+    };
+    server = started.server;
+    shutdown = started.shutdown;
+  });
 });
 
 describe('bearer middleware', () => {
@@ -77,10 +92,26 @@ describe('bearer middleware', () => {
     expect(resp.status).toBe(200);
   });
 
-  it('keeps health / version / daemon-status open without a bearer', async () => {
-    for (const path of ['/api/health', '/api/version', '/api/daemon/status']) {
+  it('keeps health / readiness / version probes open without a bearer', async () => {
+    for (const path of ['/api/health', '/api/ready', '/api/version']) {
       const resp = await fetch(`${baseUrl}${path}`);
       expect(resp.status).toBe(200);
     }
+  });
+
+  it('disables bearer middleware when OD_DISABLE_API_AUTH=1 even if OD_API_TOKEN is set', () => {
+    expect(
+      isApiTokenMiddlewareEnabled({
+        ...process.env,
+        OD_API_TOKEN: 'secret-test-token',
+        OD_DISABLE_API_AUTH: '1',
+      }),
+    ).toBe(false);
+    expect(
+      isApiAuthDisabled({
+        ...process.env,
+        OD_DISABLE_API_AUTH: '1',
+      }),
+    ).toBe(true);
   });
 });

@@ -4,12 +4,37 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { isOpenDesignHostAvailable, pickHostWorkingDir } from '@open-design/host';
 import {
   buildDesignSystemCreateSelection,
   defaultDesignSystemSelection,
   NewProjectPanel,
 } from '../../src/components/NewProjectPanel';
+import { openFolderDialog } from '../../src/providers/registry';
 import type { DesignSystemSummary, ProjectTemplate, SkillSummary } from '../../src/types';
+
+vi.mock('@open-design/host', async () => {
+  const actual = await vi.importActual<typeof import('@open-design/host')>('@open-design/host');
+  return {
+    ...actual,
+    isOpenDesignHostAvailable: vi.fn(),
+    pickHostWorkingDir: vi.fn(),
+  };
+});
+
+vi.mock('../../src/providers/registry', async () => {
+  const actual = await vi.importActual<typeof import('../../src/providers/registry')>(
+    '../../src/providers/registry',
+  );
+  return {
+    ...actual,
+    openFolderDialog: vi.fn(),
+  };
+});
+
+const mockedIsHostAvailable = vi.mocked(isOpenDesignHostAvailable);
+const mockedPickHostWorkingDir = vi.mocked(pickHostWorkingDir);
+const mockedOpenFolderDialog = vi.mocked(openFolderDialog);
 
 const skills: SkillSummary[] = [
   {
@@ -36,6 +61,8 @@ const designSystems: DesignSystemSummary[] = [
     summary: 'Friendly tactile product UI.',
     category: 'Product',
     swatches: ['#f4efe7', '#25211d'],
+    source: 'built-in',
+    status: 'published',
   },
   {
     id: 'noir',
@@ -43,6 +70,18 @@ const designSystems: DesignSystemSummary[] = [
     summary: 'High-contrast editorial system.',
     category: 'Editorial',
     swatches: ['#111111', '#f7f0e8'],
+    source: 'built-in',
+    status: 'published',
+  },
+  {
+    id: 'user:draft-system',
+    title: 'Draft Personal DS',
+    summary: 'Should not be selectable for project creation.',
+    category: 'Personal',
+    swatches: ['#663399', '#faf7ff'],
+    source: 'user',
+    isEditable: true,
+    status: 'draft',
   },
 ];
 
@@ -60,6 +99,7 @@ afterEach(() => {
   cleanup();
   globalThis.ResizeObserver = originalResizeObserver;
   Element.prototype.scrollIntoView = originalScrollIntoView;
+  vi.unstubAllGlobals();
 });
 
 const originalResizeObserver = globalThis.ResizeObserver;
@@ -74,6 +114,9 @@ class ResizeObserverMock {
 beforeEach(() => {
   globalThis.ResizeObserver = ResizeObserverMock as typeof ResizeObserver;
   Element.prototype.scrollIntoView = vi.fn();
+  vi.clearAllMocks();
+  mockedIsHostAvailable.mockReturnValue(false);
+  mockedOpenFolderDialog.mockResolvedValue(null);
 });
 
 describe('NewProjectPanel design system defaults', () => {
@@ -99,6 +142,26 @@ describe('NewProjectPanel design system defaults', () => {
     expect(markup).toContain('Clay');
     expect(markup).toContain('Default');
     expect(markup).not.toContain('Freeform');
+  });
+
+  it('filters draft personal design systems out of the new project picker', () => {
+    render(
+      <NewProjectPanel
+        skills={skills}
+        designSystems={designSystems}
+        defaultDesignSystemId="clay"
+        templates={[]}
+        onDeleteTemplate={vi.fn()}
+        promptTemplates={[]}
+        onCreate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('design-system-trigger'));
+
+    expect(screen.queryByRole('option', { name: /Draft Personal DS/i })).toBeNull();
+    expect(screen.getByRole('option', { name: /Clay/i })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /Editorial Noir/i })).toBeTruthy();
   });
 
   it('keeps media project creation from inheriting a hidden design system pick', () => {
@@ -634,9 +697,170 @@ describe('NewProjectPanel design system defaults', () => {
   });
 });
 
+describe('NewProjectPanel working directory picker', () => {
+  it('includes a browser-picked working directory in the create payload', async () => {
+    const onCreate = vi.fn();
+    mockedIsHostAvailable.mockReturnValue(false);
+    mockedOpenFolderDialog.mockResolvedValue('/Users/me/product-designs');
+
+    render(
+      <NewProjectPanel
+        skills={skills}
+        designSystems={designSystems}
+        defaultDesignSystemId="clay"
+        templates={templates}
+        onDeleteTemplate={vi.fn()}
+        promptTemplates={[]}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Local storage' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /product-designs/i })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId('create-project'));
+
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          userWorkingDir: '/Users/me/product-designs',
+        }),
+      }),
+    );
+    expect(mockedPickHostWorkingDir).not.toHaveBeenCalled();
+  });
+
+  it('threads the desktop host working-dir token into the create payload', async () => {
+    const onCreate = vi.fn();
+    mockedIsHostAvailable.mockReturnValue(true);
+    mockedPickHostWorkingDir.mockResolvedValue({
+      ok: true,
+      baseDir: '/Users/me/host-designs',
+      token: 'host-token',
+    });
+
+    render(
+      <NewProjectPanel
+        skills={skills}
+        designSystems={designSystems}
+        defaultDesignSystemId="clay"
+        templates={templates}
+        onDeleteTemplate={vi.fn()}
+        promptTemplates={[]}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Local storage' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /host-designs/i })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId('create-project'));
+
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userWorkingDirToken: 'host-token',
+        metadata: expect.objectContaining({
+          userWorkingDir: '/Users/me/host-designs',
+        }),
+      }),
+    );
+    expect(mockedOpenFolderDialog).not.toHaveBeenCalled();
+  });
+
+  it('surfaces host picker failures without falling back to an untokened browser path', async () => {
+    mockedIsHostAvailable.mockReturnValue(true);
+    mockedPickHostWorkingDir.mockResolvedValue({
+      ok: false,
+      reason: 'host build does not support pickWorkingDir',
+    });
+
+    render(
+      <NewProjectPanel
+        skills={skills}
+        designSystems={designSystems}
+        defaultDesignSystemId="clay"
+        templates={templates}
+        onDeleteTemplate={vi.fn()}
+        promptTemplates={[]}
+        onCreate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Local storage' }));
+
+    expect(await screen.findByText(/Couldn't open the folder picker/i)).toBeTruthy();
+    expect(mockedOpenFolderDialog).not.toHaveBeenCalled();
+  });
+
+  it('surfaces browser picker daemon failures with localized copy and native details', async () => {
+    mockedIsHostAvailable.mockReturnValue(false);
+    mockedOpenFolderDialog.mockRejectedValue(new Error('Could not open folder picker: zenity is not installed'));
+
+    render(
+      <NewProjectPanel
+        skills={skills}
+        designSystems={designSystems}
+        defaultDesignSystemId="clay"
+        templates={templates}
+        onDeleteTemplate={vi.fn()}
+        promptTemplates={[]}
+        onCreate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Local storage' }));
+
+    expect(await screen.findByText('Could not open folder picker')).toBeTruthy();
+    expect(await screen.findByText('zenity is not installed')).toBeTruthy();
+    expect(screen.queryByText('Could not open folder picker: zenity is not installed')).toBeNull();
+    expect(mockedOpenFolderDialog).toHaveBeenCalledWith({ throwOnError: true });
+  });
+});
+
 describe('NewProjectPanel folder import feedback', () => {
-  it('shows an error when manual folder import rejects with a daemon message', async () => {
+  it('shows an error when Claude Design zip import resolves as failed', async () => {
+    const onImportClaudeDesign = vi.fn().mockResolvedValue({
+      ok: false,
+      message: 'unsupported zip contents',
+    });
+
+    const { container } = render(
+      <NewProjectPanel
+        skills={skills}
+        designSystems={designSystems}
+        defaultDesignSystemId="clay"
+        templates={templates}
+        onDeleteTemplate={vi.fn()}
+        promptTemplates={[]}
+        onCreate={vi.fn()}
+        onImportClaudeDesign={onImportClaudeDesign}
+      />,
+    );
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    const file = new File(['zip'], 'relume.zip', { type: 'application/zip' });
+    expect(input).toBeTruthy();
+    fireEvent.change(input!, { target: { files: [file] } });
+
+    expect(onImportClaudeDesign).toHaveBeenCalledWith(file);
+    expect(await screen.findByText('Import failed: unsupported zip contents')).toBeTruthy();
+  });
+
+  it('shows an error when folder picker import rejects with a daemon message', async () => {
     const onImportFolder = vi.fn().mockRejectedValue(new Error('folder not found'));
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url) => {
+      if (typeof url === 'string' && url === '/api/dialog/open-folder') {
+        return new Response(
+          JSON.stringify({ path: '/missing/project' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }));
 
     render(
       <NewProjectPanel
@@ -651,12 +875,11 @@ describe('NewProjectPanel folder import feedback', () => {
       />,
     );
 
-    fireEvent.change(screen.getByPlaceholderText('/path/to/project'), {
-      target: { value: '/missing/project' },
-    });
     fireEvent.click(screen.getByRole('button', { name: 'Open folder' }));
 
-    expect(onImportFolder).toHaveBeenCalledWith('/missing/project');
+    await waitFor(() => {
+      expect(onImportFolder).toHaveBeenCalledWith('/missing/project');
+    });
     expect(await screen.findByText('folder not found')).toBeTruthy();
   });
 });
@@ -769,5 +992,123 @@ describe('NewProjectPanel template deletion', () => {
 
     resolveDelete(true);
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  });
+});
+
+describe('NewProjectPanel start-from rail', () => {
+  const deckTemplate: SkillSummary = {
+    id: 'html-ppt-pitch-deck',
+    name: 'Pitch deck',
+    description: 'Investor pitch deck template',
+    mode: 'deck',
+    surface: 'web',
+    previewType: 'html',
+    designSystemRequired: true,
+    defaultFor: [],
+    triggers: [],
+    upstream: null,
+    hasBody: true,
+    examplePrompt: '',
+    aggregatesExamples: false,
+  };
+  const prototypeTemplate: SkillSummary = {
+    id: 'saas-landing',
+    name: 'SaaS landing',
+    description: 'SaaS landing page template',
+    mode: 'prototype',
+    surface: 'web',
+    previewType: 'html',
+    designSystemRequired: true,
+    defaultFor: [],
+    triggers: [],
+    upstream: null,
+    hasBody: true,
+    examplePrompt: '',
+    aggregatesExamples: false,
+  };
+  const deckSkill: SkillSummary = {
+    id: 'simple-deck',
+    name: 'Simple deck',
+    description: 'Default deck skill',
+    mode: 'deck',
+    surface: 'web',
+    previewType: 'html',
+    designSystemRequired: true,
+    defaultFor: ['deck'],
+    triggers: [],
+    upstream: null,
+    hasBody: true,
+    examplePrompt: '',
+    aggregatesExamples: false,
+  };
+
+  function renderPanel(onCreate = vi.fn()) {
+    render(
+      <NewProjectPanel
+        skills={[...skills, deckSkill]}
+        designTemplates={[deckTemplate, prototypeTemplate]}
+        designSystems={designSystems}
+        defaultDesignSystemId={null}
+        templates={[]}
+        onDeleteTemplate={vi.fn()}
+        promptTemplates={[]}
+        onCreate={onCreate}
+      />,
+    );
+    return onCreate;
+  }
+
+  it('shows a Blank-first rail scoped to the tab mode and defaults create to the tab skill', () => {
+    const onCreate = renderPanel();
+
+    const blank = screen.getByTestId('newproj-start-blank');
+    expect(blank.getAttribute('aria-checked')).toBe('true');
+    // Blank card renders before any template card inside the rail.
+    const row = blank.parentElement!;
+    expect(row.firstElementChild).toBe(blank);
+    // Prototype tab only offers prototype-mode templates.
+    expect(screen.getByTestId('newproj-start-saas-landing')).toBeTruthy();
+    expect(screen.queryByTestId('newproj-start-html-ppt-pitch-deck')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('create-project'));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ skillId: 'prototype-skill' }),
+    );
+  });
+
+  it('routes create through the picked design template', () => {
+    const onCreate = renderPanel();
+
+    fireEvent.click(screen.getByTestId('newproj-start-saas-landing'));
+    expect(
+      screen.getByTestId('newproj-start-saas-landing').getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      screen.getByTestId('newproj-start-blank').getAttribute('aria-checked'),
+    ).toBe('false');
+
+    fireEvent.click(screen.getByTestId('create-project'));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ skillId: 'saas-landing' }),
+    );
+  });
+
+  it('resets to Blank when switching tabs so a pick never leaks across scenarios', () => {
+    const onCreate = renderPanel();
+
+    fireEvent.click(screen.getByTestId('newproj-start-saas-landing'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Slide deck' }));
+
+    // Deck tab shows its own rail: blank first, deck templates only.
+    expect(
+      screen.getByTestId('newproj-start-blank').getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(screen.getByTestId('newproj-start-html-ppt-pitch-deck')).toBeTruthy();
+    expect(screen.queryByTestId('newproj-start-saas-landing')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('create-project'));
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ skillId: 'simple-deck' }),
+    );
   });
 });

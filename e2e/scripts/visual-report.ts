@@ -13,12 +13,14 @@ const marker = '<!-- visual-regression-bot -->';
 const visualPrefix = 'visual-regression';
 const inlineCaseLimit = 20;
 const pixelThreshold = 0.1;
+const changedPixelFloor = 500;
+const comparisonImageWidth = 220;
 const diffBoxPadding = 6;
 const diffBoxMergeDistance = 12;
 const diffBoxStrokeWidth = 3;
 const diffBoxColor = [255, 0, 0, 255] as const;
 const maxDiffBoxRegions = 2_000;
-const maxCaseCount = 40;
+const maxCaseCount = 60;
 const maxPngBytes = 10 * 1024 * 1024;
 const maxPngPixels = 4_000_000;
 const caseNamePattern = /^visual-[a-z0-9][a-z0-9-_]{0,80}$/u;
@@ -46,12 +48,25 @@ type ComparedCase = {
   name: string;
   status: 'changed' | 'unchanged' | 'missing-baseline' | 'failed';
   diffPixels?: number;
+  diffPixelRatio?: number;
   baselineSha?: string;
   baselineBehindBy?: number;
   mainUrl?: string;
   prUrl?: string;
   diffUrl?: string;
   error?: string;
+};
+
+type CompareCaseOps = {
+  putFile?: (r2: R2Config, key: string, filePath: string) => Promise<void>;
+  findBaseline?: (r2: R2Config, caseName: string, candidateShas: string[]) => Promise<BaselineLookup | null>;
+  downloadObject?: (r2: R2Config, key: string, outputPath: string) => Promise<void>;
+  writeDiffPng?: (mainPath: string, prPath: string, diffPath: string) => Promise<DiffPngResult>;
+};
+
+type DiffPngResult = {
+  diffPixels: number;
+  totalPixels: number;
 };
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -154,7 +169,7 @@ async function comparePr(options: ParsedArgs): Promise<void> {
   console.log(`Wrote visual report for ${compared.length} cases to ${commentOut}.`);
 }
 
-async function compareCase(input: {
+export async function compareCase(input: {
   r2: R2Config;
   prNumber: string;
   runId: string;
@@ -162,12 +177,29 @@ async function compareCase(input: {
   visualCase: VisualCase;
   candidateShas: string[];
   outputDir: string;
-}): Promise<ComparedCase> {
+}, ops: CompareCaseOps = {}): Promise<ComparedCase> {
   const { r2, prNumber, runId, headSha, visualCase, candidateShas, outputDir } = input;
+  const putFileOp = ops.putFile ?? putFile;
+  const findBaselineOp = ops.findBaseline ?? findBaseline;
+  const downloadObjectOp = ops.downloadObject ?? downloadObject;
+  const writeDiffPngOp = ops.writeDiffPng ?? writeDiffPng;
   const prKey = prImageKey(prNumber, runId, 'pr', visualCase.name);
-  await putFile(r2, prKey, visualCase.path);
 
-  const baseline = await findBaseline(r2, visualCase.name, candidateShas);
+  const visualBuffer = await readFile(visualCase.path);
+
+  try {
+    validatePngBuffer(visualBuffer, visualCase.path);
+  } catch (error) {
+    return {
+      name: visualCase.name,
+      status: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  await putFileOp(r2, prKey, visualCase.path);
+
+  const baseline = await findBaselineOp(r2, visualCase.name, candidateShas);
   if (baseline == null) {
     return {
       name: visualCase.name,
@@ -178,39 +210,51 @@ async function compareCase(input: {
 
   const mainPath = path.join(outputDir, 'main', `${visualCase.name}.png`);
   const diffPath = path.join(outputDir, 'diff', `${visualCase.name}.png`);
-  await downloadObject(r2, baseline.key, mainPath);
+  await downloadObjectOp(r2, baseline.key, mainPath);
 
+  let diffResult: DiffPngResult;
   try {
-    const diffPixels = await writeDiffPng(mainPath, visualCase.path, diffPath);
-    const mainKey = prImageKey(prNumber, runId, 'main', visualCase.name);
-    const diffKey = prImageKey(prNumber, runId, 'diff', visualCase.name);
-    await putFile(r2, mainKey, mainPath);
-    await putFile(r2, diffKey, diffPath);
-
-    return {
-      name: visualCase.name,
-      status: diffPixels > 0 ? 'changed' : 'unchanged',
-      diffPixels,
-      baselineSha: baseline.sha,
-      baselineBehindBy: baseline.behindBy,
-      mainUrl: publicUrl(r2, mainKey),
-      prUrl: publicUrl(r2, prKey),
-      diffUrl: publicUrl(r2, diffKey),
-    };
+    diffResult = await writeDiffPngOp(mainPath, visualCase.path, diffPath);
   } catch (error) {
     return {
       name: visualCase.name,
       status: 'failed',
-      baselineSha: baseline.sha,
-      baselineBehindBy: baseline.behindBy,
-      mainUrl: publicUrl(r2, baseline.key),
+      ...(baseline == null
+        ? {}
+        : {
+            baselineSha: baseline.sha,
+            baselineBehindBy: baseline.behindBy,
+            mainUrl: publicUrl(r2, baseline.key),
+          }),
       prUrl: publicUrl(r2, prKey),
       error: error instanceof Error ? error.message : String(error),
     };
   }
+
+  const mainKey = prImageKey(prNumber, runId, 'main', visualCase.name);
+  const diffKey = prImageKey(prNumber, runId, 'diff', visualCase.name);
+  await putFileOp(r2, mainKey, mainPath);
+  await putFileOp(r2, diffKey, diffPath);
+
+  const diffPixelRatio = diffResult.diffPixels / diffResult.totalPixels;
+  return {
+    name: visualCase.name,
+    status: isChangedVisualDiff(diffResult.diffPixels, diffPixelRatio) ? 'changed' : 'unchanged',
+    diffPixels: diffResult.diffPixels,
+    diffPixelRatio,
+    baselineSha: baseline.sha,
+    baselineBehindBy: baseline.behindBy,
+    mainUrl: publicUrl(r2, mainKey),
+    prUrl: publicUrl(r2, prKey),
+    diffUrl: publicUrl(r2, diffKey),
+  };
 }
 
-async function writeDiffPng(mainPath: string, prPath: string, diffPath: string): Promise<number> {
+export function isChangedVisualDiff(diffPixels: number, _diffPixelRatio: number): boolean {
+  return diffPixels >= changedPixelFloor;
+}
+
+async function writeDiffPng(mainPath: string, prPath: string, diffPath: string): Promise<DiffPngResult> {
   const main = PNG.sync.read(await readFile(mainPath));
   const pr = PNG.sync.read(await readFile(prPath));
   assertPngSize(main, mainPath);
@@ -234,7 +278,7 @@ async function writeDiffPng(mainPath: string, prPath: string, diffPath: string):
 
   await mkdir(path.dirname(diffPath), { recursive: true });
   await writeFile(diffPath, PNG.sync.write(diff));
-  return diffPixels;
+  return { diffPixels, totalPixels: width * height };
 }
 
 export type DiffBox = {
@@ -425,6 +469,29 @@ function setPixel(png: PNG, x: number, y: number, color: readonly [number, numbe
   png.data[index + 3] = color[3];
 }
 
+function validatePngBuffer(buffer: Buffer, filePath: string): void {
+  assertPngHeaderSize(buffer, filePath);
+  const png = PNG.sync.read(buffer);
+  assertPngSize(png, filePath);
+}
+
+function assertPngHeaderSize(buffer: Buffer, filePath: string): void {
+  if (buffer.length < 24) {
+    throw new Error(`Visual case ${filePath} is not a valid PNG file`);
+  }
+  const signature = buffer.subarray(0, 8);
+  const expectedSignature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (!signature.equals(expectedSignature)) {
+    throw new Error(`Visual case ${filePath} is not a valid PNG file`);
+  }
+  const ihdrLength = buffer.readUInt32BE(8);
+  const chunkType = buffer.toString('ascii', 12, 16);
+  if (ihdrLength !== 13 || chunkType !== 'IHDR') {
+    throw new Error(`Visual case ${filePath} is not a valid PNG file`);
+  }
+  assertPngPixels(buffer.readUInt32BE(16), buffer.readUInt32BE(20), filePath);
+}
+
 function assertPngSize(png: PNG, filePath: string): void {
   assertPngPixels(png.width, png.height, filePath);
 }
@@ -521,9 +588,9 @@ function renderComment(input: { compared: ComparedCase[]; headSha: string; baseS
 
   lines.push(`Head: \`${shortSha(headSha)}\` · Base: \`${shortSha(baseSha)}\``);
   if (missing.length === compared.length) {
-    lines.push('', '> Baseline unavailable; PR screenshots captured, no diff computed.');
+    lines.push('', '> Baseline unavailable; PR screenshots are new visual cases and need baseline review.');
   } else if (missing.length > 0) {
-    lines.push('', `> ${missing.length} case(s) have no baseline; PR screenshots are shown without a diff.`);
+    lines.push('', `> ${missing.length} new visual case(s) have no baseline yet; review these screenshots before accepting their baselines.`);
   }
   if (hasFallbackBaseline) {
     lines.push('', '> Some cases used the nearest available ancestor baseline instead of the exact base SHA.');
@@ -535,7 +602,7 @@ function renderComment(input: { compared: ComparedCase[]; headSha: string; baseS
   lines.push('', summaryLine({ changed, unchanged, missing, failed }), '');
 
   if (changed.length > 0) {
-    lines.push('### Changed cases', '', ...renderCaseTable(changed.slice(0, inlineCaseLimit)), '');
+    lines.push('### Changed cases', '', ...renderComparisonCaseTable(changed.slice(0, inlineCaseLimit)), '');
     if (changed.length > inlineCaseLimit) {
       lines.push(`_${changed.length - inlineCaseLimit} additional changed case(s) omitted from this comment._`, '');
     }
@@ -550,11 +617,14 @@ function renderComment(input: { compared: ComparedCase[]; headSha: string; baseS
   }
 
   if (missing.length > 0) {
-    lines.push('<details><summary>PR screenshots without baselines</summary>', '', ...renderCaseTable(missing.slice(0, inlineCaseLimit), false), '</details>', '');
+    lines.push('### New cases without baselines', '', ...renderMissingCaseGrid(missing.slice(0, inlineCaseLimit)), '');
+    if (missing.length > inlineCaseLimit) {
+      lines.push(`_${missing.length - inlineCaseLimit} additional new case(s) omitted from this comment._`, '');
+    }
   }
 
   if (unchanged.length > 0) {
-    lines.push('<details><summary>Unchanged cases</summary>', '', ...renderCaseTable(unchanged.slice(0, inlineCaseLimit)), '</details>', '');
+    lines.push('<details><summary>Unchanged cases</summary>', '', ...renderComparisonCaseTable(unchanged.slice(0, inlineCaseLimit)), '</details>', '');
   }
 
   lines.push('_Visual diff is advisory only and does not block merging._', '');
@@ -565,34 +635,53 @@ function summaryLine(groups: { changed: ComparedCase[]; unchanged: ComparedCase[
   return [
     `**${groups.changed.length} changed**`,
     `${groups.unchanged.length} unchanged`,
-    `${groups.missing.length} missing baseline`,
+    `${groups.missing.length} new without baseline`,
     `${groups.failed.length} failed`,
   ].join(' · ');
 }
 
-function renderCaseTable(cases: ComparedCase[], includeDiff = true): string[] {
-  const lines = includeDiff
-    ? ['| Case | Main | PR | Diff |', '| --- | --- | --- | --- |']
-    : ['| Case | PR |', '| --- | --- |'];
-
+function renderComparisonCaseTable(cases: ComparedCase[]): string[] {
+  const lines: string[] = ['| Case | Main | PR | Diff |', '| --- | --- | --- | --- |'];
   for (const visualCase of cases) {
-    const baselineNote = visualCase.baselineBehindBy != null && visualCase.baselineBehindBy > 0
-      ? `<br><sub>baseline ${visualCase.baselineBehindBy} commit(s) behind</sub>`
-      : '';
-    if (includeDiff) {
-      lines.push(
-        `| ${escapeMarkdown(visualCase.name)}${baselineNote} | ${imageCell(visualCase.mainUrl, 'main')} | ${imageCell(visualCase.prUrl, 'pr')} | ${imageCell(visualCase.diffUrl, 'diff')} |`,
-      );
-    } else {
-      lines.push(`| ${escapeMarkdown(visualCase.name)} | ${imageCell(visualCase.prUrl, 'pr')} |`);
-    }
+    lines.push(`| ${caseSummaryCell(visualCase)} | ${imageCell(visualCase.mainUrl, 'main', comparisonImageWidth)} | ${imageCell(visualCase.prUrl, 'pr', comparisonImageWidth)} | ${imageCell(visualCase.diffUrl, 'diff', comparisonImageWidth)} |`);
   }
 
   return lines;
 }
 
-function imageCell(url: string | undefined, alt: string): string {
-  return url == null ? 'n/a' : `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" width="280">`;
+function caseSummaryCell(visualCase: ComparedCase): string {
+    const baselineNote = visualCase.baselineBehindBy != null && visualCase.baselineBehindBy > 0
+      ? ` · baseline ${visualCase.baselineBehindBy} commit(s) behind`
+      : '';
+    const diffNote = visualCase.diffPixels == null
+      ? ''
+      : ` · ${visualCase.diffPixels.toLocaleString('en-US')} px${visualCase.diffPixelRatio == null ? '' : ` (${formatPercent(visualCase.diffPixelRatio)})`}`;
+    const notes = `${diffNote}${baselineNote}`.replace(/^ · /u, '');
+    return notes.length > 0
+      ? `<strong>${escapeHtml(visualCase.name)}</strong><br><sub>${escapeHtml(notes)}</sub>`
+      : `<strong>${escapeHtml(visualCase.name)}</strong>`;
+}
+
+function renderMissingCaseGrid(cases: ComparedCase[]): string[] {
+  const lines: string[] = ['| PR | PR | PR |', '| --- | --- | --- |'];
+  for (let index = 0; index < cases.length; index += 3) {
+    const row = cases.slice(index, index + 3).map((visualCase) => {
+      return `<strong>${escapeHtml(visualCase.name)}</strong><br>${imageCell(visualCase.prUrl, 'pr', comparisonImageWidth)}`;
+    });
+    while (row.length < 3) {
+      row.push('');
+    }
+    lines.push(`| ${row.join(' | ')} |`);
+  }
+  return lines;
+}
+
+function imageCell(url: string | undefined, alt: string, width: number): string {
+  return url == null ? 'n/a' : `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" width="${width}">`;
+}
+
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(2)}%`;
 }
 
 async function objectExists(r2: R2Config, key: string): Promise<boolean> {

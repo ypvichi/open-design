@@ -8,6 +8,7 @@ import {
   codex,
   mkdirSync,
   mkdtempSync,
+  minimalAgentDef,
   resolveAgentLaunch,
   rmSync,
   tmpdir,
@@ -27,11 +28,39 @@ test('applyAgentLaunchEnv prepends nodeBinDir and wrapper dir, deduping PATH', (
     { PATH: ['/usr/bin', '/opt/tools/bin', '/bin', '/usr/bin'].join(delimiter) },
     launch,
     '/node/bin',
+    [],
   );
 
   assert.equal(
     env.PATH,
     ['/node/bin', '/opt/tools/bin', '/usr/bin', '/bin'].join(delimiter),
+  );
+});
+
+test('applyAgentLaunchEnv appends toolchain dirs so shebang interpreters (e.g. bun) resolve at spawn time', () => {
+  // Regression for: Pi (`#!/usr/bin/env bun`) resolved on PATH but its version
+  // probe / run spawn failed with exit 127 ("env: bun: No such file or
+  // directory") because the spawn PATH didn't include ~/.bun/bin, so detection
+  // wrongly marked it unavailable. The fix appends the user toolchain bin dirs
+  // (where bun lives) to the spawn PATH.
+  const env = applyAgentLaunchEnv(
+    { PATH: ['/usr/bin', '/bin'].join(delimiter) },
+    { childPathPrepend: ['/opt/homebrew/bin'] },
+    '/node/bin',
+    ['/home/me/.bun/bin', '/usr/bin'],
+  );
+
+  const parts = (env.PATH as string).split(delimiter);
+  assert.equal(parts[0], '/node/bin', 'node dir stays first');
+  assert.equal(parts[1], '/opt/homebrew/bin', 'wrapper dir stays second');
+  assert.ok(
+    parts.includes('/home/me/.bun/bin'),
+    'toolchain bin dir (where the bun interpreter lives) must be on the spawn PATH',
+  );
+  assert.equal(
+    parts.filter((p: string) => p === '/usr/bin').length,
+    1,
+    'a toolchain dir already on PATH must not be duplicated',
   );
 });
 
@@ -44,7 +73,7 @@ test('applyAgentLaunchEnv updates the Path key in-place without creating a compe
   };
   const launch = { childPathPrepend: ['/opt/agent/bin'] };
 
-  const env = applyAgentLaunchEnv(base, launch, '/opt/node/bin');
+  const env = applyAgentLaunchEnv(base, launch, '/opt/node/bin', []);
 
   // Original 'Path' key must be updated in-place.
   assert.ok('Path' in env, 'original Path key must be preserved');
@@ -68,7 +97,7 @@ winTest('applyAgentLaunchEnv injects Node binary dir and wrapper dir into a Wind
   };
   const launch = { childPathPrepend: ['C:\\Users\\User\\AppData\\Roaming\\npm'] };
 
-  const env = applyAgentLaunchEnv(windowsBase, launch, 'C:\\Program Files\\nodejs');
+  const env = applyAgentLaunchEnv(windowsBase, launch, 'C:\\Program Files\\nodejs', []);
 
   // Original 'Path' key must be updated in-place — no competing 'PATH' key.
   assert.ok('Path' in env, 'original Path key must be preserved');
@@ -94,11 +123,13 @@ fsTest('resolveAgentLaunch selects nvm-installed codex under a minimal PATH and 
     return withEnvSnapshot(['HOME', 'PATH', 'OD_AGENT_HOME'], () => {
       const binDir = join(home, '.nvm', 'versions', 'node', '24.11.0', 'bin');
       const codexBin = join(binDir, 'codex');
+      const pathBin = join(home, 'path-bin');
       mkdirSync(binDir, { recursive: true });
+      mkdirSync(pathBin, { recursive: true });
       writeFileSync(codexBin, '#!/bin/sh\nexit 0\n');
       chmodSync(codexBin, 0o755);
       process.env.HOME = home;
-      process.env.PATH = '/usr/bin:/bin';
+      process.env.PATH = pathBin;
       process.env.OD_AGENT_HOME = home;
 
       const launch = resolveAgentLaunch(codex);
@@ -109,6 +140,44 @@ fsTest('resolveAgentLaunch selects nvm-installed codex under a minimal PATH and 
     });
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+fsTest('resolveAgentLaunch uses packaged built-in Vela for AMR and prepends its dirname', () => {
+  const root = mkdtempSync(join(tmpdir(), 'od-launch-amr-built-in-'));
+  try {
+    return withEnvSnapshot(['PATH', 'OD_AGENT_HOME', 'OD_RESOURCE_ROOT', 'VELA_OPENCODE_BIN'], () => {
+      const resourceRoot = join(root, 'resources', 'open-design');
+      const builtInDir = join(resourceRoot, 'bin');
+      const builtInVela = join(builtInDir, 'vela');
+      const companionTree = join(builtInDir, 'libexec', 'opencode');
+      const companionExe = join(
+        companionTree,
+        process.platform === 'win32' ? 'opencode.exe' : 'opencode',
+      );
+      mkdirSync(builtInDir, { recursive: true });
+      mkdirSync(companionTree, { recursive: true });
+      writeFileSync(builtInVela, '#!/bin/sh\nexit 0\n');
+      chmodSync(builtInVela, 0o755);
+      // packagedVelaOpenCodeCompanionTree now verifies the inner opencode
+      // executable, not just the directory — see #3148. Fixture must match.
+      writeFileSync(companionExe, '#!/bin/sh\nexit 0\n');
+      chmodSync(companionExe, 0o755);
+      process.env.PATH = '';
+      process.env.OD_AGENT_HOME = join(root, 'empty-home');
+      process.env.OD_RESOURCE_ROOT = resourceRoot;
+      delete process.env.VELA_OPENCODE_BIN;
+
+      const launch = resolveAgentLaunch(minimalAgentDef({ id: 'amr', bin: 'vela' }));
+
+      assert.equal(launch.selectedPath, builtInVela);
+      assert.equal(launch.launchPath, builtInVela);
+      assert.equal(launch.launchKind, 'selected');
+      assert.deepEqual(launch.childPathPrepend, [builtInDir]);
+      assert.equal(launch.diagnostic, null);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

@@ -74,6 +74,7 @@ export function migratePlugins(db: SqliteDb): void {
       task_kind                TEXT NOT NULL,
       inputs_json              TEXT NOT NULL,
       resolved_context_json    TEXT NOT NULL,
+      craft_requires_json      TEXT NOT NULL DEFAULT '[]',
       pipeline_json            TEXT,
       genui_surfaces_json      TEXT NOT NULL DEFAULT '[]',
       capabilities_granted     TEXT NOT NULL,
@@ -142,6 +143,30 @@ export function migratePlugins(db: SqliteDb): void {
     CREATE INDEX IF NOT EXISTS idx_genui_proj_surface ON genui_surfaces(project_id, surface_id);
     CREATE INDEX IF NOT EXISTS idx_genui_conv_surface ON genui_surfaces(conversation_id, surface_id);
     CREATE INDEX IF NOT EXISTS idx_genui_run          ON genui_surfaces(run_id);
+
+    CREATE TABLE IF NOT EXISTS skill_plugin_candidates (
+      id                   TEXT PRIMARY KEY,
+      project_id           TEXT NOT NULL,
+      run_id               TEXT,
+      conversation_id      TEXT,
+      assistant_message_id TEXT,
+      fingerprint          TEXT NOT NULL,
+      status               TEXT NOT NULL DEFAULT 'active',
+      title                TEXT NOT NULL,
+      description          TEXT NOT NULL,
+      confidence           REAL NOT NULL,
+      source_refs_json     TEXT NOT NULL,
+      provenance_json      TEXT NOT NULL,
+      draft_path           TEXT,
+      created_at           INTEGER NOT NULL,
+      updated_at           INTEGER NOT NULL,
+      dismissed_at         INTEGER,
+      UNIQUE(project_id, fingerprint),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_skill_plugin_candidates_project
+      ON skill_plugin_candidates(project_id, status, created_at DESC);
   `);
 
   const marketplaceCols = db.prepare(`PRAGMA table_info(plugin_marketplaces)`).all() as DbRow[];
@@ -162,6 +187,12 @@ export function migratePlugins(db: SqliteDb): void {
     ['resolved_ref', `ALTER TABLE installed_plugins ADD COLUMN resolved_ref TEXT`],
     ['manifest_digest', `ALTER TABLE installed_plugins ADD COLUMN manifest_digest TEXT`],
     ['archive_integrity', `ALTER TABLE installed_plugins ADD COLUMN archive_integrity TEXT`],
+    // Internal bookkeeping for the bundled-plugin boot walker only (bundled.ts)
+    // — a hash of the on-disk files (open-design.json, SKILL.md, …) a bundled
+    // plugin was last registered from, so a no-op reboot can tell "nothing
+    // changed" from "SKILL.md was edited" without touching the parsed
+    // manifest/version fields other InstalledPluginRecord consumers rely on.
+    ['bundled_content_digest', `ALTER TABLE installed_plugins ADD COLUMN bundled_content_digest TEXT`],
   ] as const) {
     if (!installedCols.some((c) => c['name'] === name)) db.exec(ddl);
   }
@@ -177,6 +208,7 @@ export function migratePlugins(db: SqliteDb): void {
     ['resolved_source', `ALTER TABLE applied_plugin_snapshots ADD COLUMN resolved_source TEXT`],
     ['resolved_ref', `ALTER TABLE applied_plugin_snapshots ADD COLUMN resolved_ref TEXT`],
     ['archive_integrity', `ALTER TABLE applied_plugin_snapshots ADD COLUMN archive_integrity TEXT`],
+    ['craft_requires_json', `ALTER TABLE applied_plugin_snapshots ADD COLUMN craft_requires_json TEXT NOT NULL DEFAULT '[]'`],
   ] as const) {
     if (!snapshotCols.some((c) => c['name'] === name)) db.exec(ddl);
   }

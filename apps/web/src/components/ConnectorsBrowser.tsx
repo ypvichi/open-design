@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type SyntheticEvent,
 } from 'react';
+import { VisuallyHidden } from '@open-design/components';
 import type { ConnectorConnectResponse, ConnectorDetail, ConnectorStatusResponse } from '@open-design/contracts';
 import { useT } from '../i18n';
 import type { Dict } from '../i18n/types';
@@ -24,11 +25,15 @@ import {
   isTrustedConnectorCallbackOrigin,
   sortConnectorsForSearch,
 } from './EntryView';
+import {
+  CONNECTOR_CALLBACK_MESSAGE_TYPE,
+  notifyConnectorsChanged,
+} from './connectors-events';
+import { hasConnectorStatusChanges } from './connectors-state';
 import { ConnectorLogo, useResolvedTheme } from './ConnectorLogo';
 import { Icon } from './Icon';
 import { CenteredLoader } from './Loading';
 
-const CONNECTOR_CALLBACK_MESSAGE_TYPE = 'open-design:connector-connected';
 const CONNECTOR_AUTH_PENDING_STORAGE_KEY = 'od-connectors-authorization-pending';
 const CONNECTOR_AUTH_PENDING_POLL_MS = 2_000;
 const CONNECTOR_TOOL_PREVIEW_LIMIT = 50;
@@ -257,7 +262,7 @@ interface ConnectorsBrowserProps {
    *  (SettingsDialog uses the settings page family instead), no event
    *  is fired. */
   onConnectorsTabClick?: (
-    element: 'provider_chip' | 'search_connectors',
+    element: 'provider_chip' | 'search_connectors' | 'gate_card',
   ) => void;
   /** Analytics hook for the per-connector authorization result. The
    *  daemon emits its own server-side telemetry but the click→outcome
@@ -449,15 +454,22 @@ export function ConnectorsBrowser({
   const [selectedProvider, setSelectedProvider] = useState<string>(DEFAULT_PROVIDER_TAB_ID);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const searchTrackedRef = useRef(false);
+  const connectorsRef = useRef(connectors);
   const logoTheme = useResolvedTheme();
   const toolPreviewRetryToken = `${composioConfigured ? 'configured' : 'unconfigured'}:${String(catalogRefreshKey)}`;
 
+  useEffect(() => {
+    connectorsRef.current = connectors;
+  }, [connectors]);
+
   const reloadConnectorStatuses = useCallback(async () => {
     const statuses = await fetchConnectorStatuses();
+    const statusChanged = hasConnectorStatusChanges(connectorsRef.current, statuses);
     setConnectors((curr) => applyConnectorStatuses(curr, statuses));
     setConnectorAuthorizationPending((curr) => updateConnectorAuthorizationPendingFromStatuses(curr, statuses));
     setConnectorAuthorizationError((curr) => clearConnectorAuthorizationErrorsForConnected(curr, statuses));
     setConnectorAuthorizationCancelFailed((curr) => clearConnectorAuthorizationCancelFailuresForConnected(curr, statuses));
+    if (statusChanged) notifyConnectorsChanged();
     return statuses;
   }, []);
 
@@ -589,13 +601,23 @@ export function ConnectorsBrowser({
   // user closed the auth flow without completing it — auto-cancel so the
   // card recovers to its default state instead of staying stuck loading.
   useEffect(() => {
-    async function onFocus() {
+    async function refreshAfterReturn() {
       const pendingBeforeReload = connectorAuthorizationPendingRef.current;
       const statuses = await reloadConnectorStatuses();
       await cancelStaleAuthorizations(pendingBeforeReload, statuses);
     }
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
+    function onVisibilityChange() {
+      if (document.visibilityState !== 'visible') return;
+      void refreshAfterReturn();
+    }
+    window.addEventListener('focus', refreshAfterReturn);
+    window.addEventListener('pageshow', refreshAfterReturn);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('focus', refreshAfterReturn);
+      window.removeEventListener('pageshow', refreshAfterReturn);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, [reloadConnectorStatuses, cancelStaleAuthorizations]);
 
   // The local Composio API-key state is authoritative for masking. Cached
@@ -668,6 +690,7 @@ export function ConnectorsBrowser({
           const result = await connectConnector(connectorId);
           updateConnector(result.connector);
           if (result.connector && !result.error) {
+            if (result.connector.status === 'connected') notifyConnectorsChanged();
             setConnectorAuthorizationPending((curr) => updateConnectorAuthorizationPendingFromConnectResponse(curr, {
               connector: result.connector!,
               ...(result.auth === undefined ? {} : { auth: result.auth }),
@@ -708,6 +731,7 @@ export function ConnectorsBrowser({
         });
         try {
           updateConnector(await disconnectConnector(connectorId));
+          notifyConnectorsChanged();
           onConnectorAuthResult?.({
             connectorId,
             action: 'disconnect',
@@ -900,7 +924,7 @@ export function ConnectorsBrowser({
             >
               <p className="connector-panel-alert-copy" role="status">
                 <strong title={alert.connectorName}>{alert.connectorName}</strong>
-                <span className="sr-only">: </span>
+                <VisuallyHidden>: </VisuallyHidden>
                 <span title={alert.message}>{alert.message}</span>
               </p>
               <button
@@ -980,13 +1004,23 @@ export function ConnectorsBrowser({
               aria-label={t('connectors.gateTitle')}
               data-testid="connector-gate"
             >
-              <div className="connector-gate-card">
+              <a
+                className="connector-gate-card"
+                href="https://app.composio.dev"
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => onConnectorsTabClick?.('gate_card')}
+              >
                 <div className="connector-gate-icon" aria-hidden>
                   <Icon name="settings" size={20} />
                 </div>
                 <h3 className="connector-gate-title">{t('connectors.gateTitle')}</h3>
                 <p className="connector-gate-body">{t('connectors.gateBody')}</p>
-              </div>
+                <span className="connector-gate-cta">
+                  {t('settings.connectorsGetApiKey')}
+                  <Icon name="external-link" size={12} />
+                </span>
+              </a>
             </div>
           ) : null}
         </div>
@@ -1302,6 +1336,7 @@ function ConnectorDetailDrawer({
   const showToolsBadge = connector.toolCount !== undefined || actualToolCount > 0 || toolsLoaded;
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const categoryLabel = connectorCategoryLabel(connector.category, t);
+  const toolsBadgeLabel = formatToolsBadge(toolCount, t);
 
   function continueAuthorization(event: SyntheticEvent) {
     event.stopPropagation();
@@ -1359,9 +1394,8 @@ function ConnectorDetailDrawer({
                 {isAuthorizationPending ? t('connectors.authorizationPending') : statusLabel(connector.status, t)}
               </span>
               {showToolsBadge ? (
-                <span className="connector-tools-badge is-ready" title={formatToolsBadge(toolCount, t)}>
-                  <Icon name="settings" size={10} />
-                  <span>{formatToolsBadge(toolCount, t)}</span>
+                <span className="connector-drawer-tool-count-chip" title={toolsBadgeLabel}>
+                  <span>{toolsBadgeLabel}</span>
                 </span>
               ) : null}
             </div>
@@ -1413,7 +1447,21 @@ function ConnectorDetailDrawer({
           ) : null}
 
           <section className="connector-drawer-section">
-            <h3 className="connector-drawer-section-title">{t('connectors.detailsLabel')}</h3>
+            <div className="connector-drawer-section-head">
+              <h3 className="connector-drawer-section-title">{t('connectors.detailsLabel')}</h3>
+              {isConnected ? (
+                <button
+                  type="button"
+                  className={`ghost connector-drawer-inline-action connector-action is-disconnect${isDisconnecting ? ' is-loading' : ''}`}
+                  disabled={!canDisconnect}
+                  aria-busy={isDisconnecting || undefined}
+                  onClick={() => onDisconnect(connector.id)}
+                >
+                  {isDisconnecting ? <Icon name="spinner" size={12} /> : null}
+                  <span>{t('connectors.disconnect')}</span>
+                </button>
+              ) : null}
+            </div>
             <dl className="connector-drawer-details">
               <div>
                 <dt>{t('connectors.statusLabel')}</dt>
@@ -1489,19 +1537,8 @@ function ConnectorDetailDrawer({
           </section>
         </div>
 
-        <footer className="connector-drawer-foot">
-          {isConnected ? (
-            <button
-              type="button"
-              className={`ghost connector-action is-disconnect${isDisconnecting ? ' is-loading' : ''}`}
-              disabled={!canDisconnect}
-              aria-busy={isDisconnecting || undefined}
-              onClick={() => onDisconnect(connector.id)}
-            >
-              {isDisconnecting ? <Icon name="spinner" size={12} /> : null}
-              <span>{t('connectors.disconnect')}</span>
-            </button>
-          ) : (
+        {!isConnected ? (
+          <footer className="connector-drawer-foot">
             <button
               type="button"
               className={`primary connector-action is-connect${isConnecting || isAuthorizationPending ? ' is-loading' : ''}`}
@@ -1512,17 +1549,17 @@ function ConnectorDetailDrawer({
               {isConnecting || isAuthorizationPending ? <Icon name="spinner" size={12} /> : null}
               <span>{isAuthorizationPending ? t('connectors.authorizationPending') : t('connectors.connect')}</span>
             </button>
-          )}
-          {isAuthorizationPending ? (
-            <button
-              type="button"
-              className="ghost connector-action is-cancel-authorization"
-              onClick={() => onCancelAuthorization(connector.id)}
-            >
-              <span>{t('connectors.cancelAuthorization')}</span>
-            </button>
-          ) : null}
-        </footer>
+            {isAuthorizationPending ? (
+              <button
+                type="button"
+                className="ghost connector-action is-cancel-authorization"
+                onClick={() => onCancelAuthorization(connector.id)}
+              >
+                <span>{t('connectors.cancelAuthorization')}</span>
+              </button>
+            ) : null}
+          </footer>
+        ) : null}
       </aside>
     </div>
   );

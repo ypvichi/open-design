@@ -3,7 +3,7 @@
 // The Home starter grid is organized around the artifact a user wants
 // to make first:
 //
-//   Prototype · Slides · Image · Video · HyperFrames · Audio
+//   Slides · Prototype · Live Artifact · Image · Video · HyperFrames · Audio
 //
 // Prototype, Slides, Image, and Video have enough bundled templates to
 // deserve a second row. Those child buckets follow the Feishu prompt
@@ -18,7 +18,10 @@
 // clicks make the row visually noisy and obscure how the overall
 // catalog is shaped.
 
-import type { InstalledPluginRecord } from '@open-design/contracts';
+import { resolveLocalizedText, type InstalledPluginRecord } from '@open-design/contracts';
+import { CURATED_LIVE_ARTIFACT_PLUGIN_IDS } from './curatedPriority';
+import { localizedText } from './localization';
+import { resolveCommercialCategoryId, type CommercialCategoryId } from './categoryLabel';
 
 export type FacetAxis = 'category' | 'subcategory';
 
@@ -130,20 +133,30 @@ function isVideoPlugin(record: InstalledPluginRecord): boolean {
   return byMode('video')(record) && !isHyperFramesPlugin(record);
 }
 
+function isLiveArtifactPlugin(record: InstalledPluginRecord): boolean {
+  return (CURATED_LIVE_ARTIFACT_PLUGIN_IDS as readonly string[]).includes(record.id);
+}
+
 // Curated artifact-kind list. Keep this aligned with the Home creation
 // intents and the app's artifact product types.
 const PRIMARY_CATEGORIES: readonly CategoryDef[] = [
-  {
-    slug: 'prototype',
-    label: 'Prototype',
-    starterPrompt: 'Create an Open Design plugin that generates an interactive prototype from a product brief.',
-    test: byMode('prototype'),
-  },
   {
     slug: 'deck',
     label: 'Slides',
     starterPrompt: 'Create an Open Design plugin that generates a polished slide deck from a narrative brief.',
     test: byMode('deck'),
+  },
+  {
+    slug: 'prototype',
+    label: 'Prototype',
+    starterPrompt: 'Create an Open Design plugin that generates an interactive prototype from a product brief.',
+    test: (record) => byMode('prototype')(record) && !isLiveArtifactPlugin(record),
+  },
+  {
+    slug: 'live-artifact',
+    label: 'Live Artifact',
+    starterPrompt: 'Create an Open Design plugin that generates a live artifact with refreshable, data-aware UI.',
+    test: isLiveArtifactPlugin,
   },
   {
     slug: 'image',
@@ -171,9 +184,107 @@ const PRIMARY_CATEGORIES: readonly CategoryDef[] = [
   },
 ];
 
+// Deck scene buckets follow the commercial "品类" taxonomy (see
+// `./categoryLabel.ts` and specs/current slides-agent-commercialization-spec):
+// the SAME 15 decision scenes the per-card category chip resolves. Membership
+// is the plugin's resolved commercial category (`resolveCommercialCategoryId`),
+// not tag-slug heuristics, so a deck lands in exactly one scene and the filter
+// row reads as one taxonomy with the card tags.
+//
+// Ordered by commercial priority: the five paid MVP scenes (fundraising,
+// corporate strategy, B2B sales, product management, design craft) lead, then
+// the secondary business scenes, with the acquisition scene (life/story) last.
+const DECK_COMMERCIAL_ORDER: readonly CommercialCategoryId[] = [
+  'fundraising-pitch',
+  'corporate-strategy',
+  'b2b-sales',
+  'product-management',
+  'design-craft',
+  'marketing-gtm',
+  'data-finance',
+  'consulting',
+  'government-policy',
+  'professional-training',
+  'academic-research',
+  'ai-literacy',
+  'career',
+  'student-coursework',
+  'life',
+];
+
+// English fallbacks only — the visible chip text is resolved through the typed
+// i18n dict (`pluginsHome.commercialCategory.<id>`) by `pluginSubfacetLabel`.
+// These must match the `en` locale values so a missing key degrades gracefully.
+const DECK_COMMERCIAL_LABELS: Record<CommercialCategoryId, string> = {
+  'student-coursework': 'Student coursework',
+  'corporate-strategy': 'Corporate strategy',
+  'professional-training': 'Professional training',
+  'b2b-sales': 'B2B sales',
+  'academic-research': 'Academic research',
+  'marketing-gtm': 'Marketing & GTM',
+  'data-finance': 'Data & finance',
+  'fundraising-pitch': 'Fundraising pitch',
+  'government-policy': 'Government & policy',
+  'product-management': 'Product management',
+  consulting: 'Consulting',
+  career: 'Career',
+  'ai-literacy': 'AI literacy',
+  life: 'Life & story',
+  'design-craft': 'Design craft',
+};
+
+const DECK_SUBCATEGORIES: readonly SubcategoryDef[] = DECK_COMMERCIAL_ORDER.map((id) => ({
+  parent: 'deck',
+  slug: id,
+  label: DECK_COMMERCIAL_LABELS[id],
+  starterPrompt: `Create an Open Design deck plugin for the ${DECK_COMMERCIAL_LABELS[id]} scene — a decision-grade slide deck with the structure, language, and visual discipline that scene's audience expects.`,
+  test: (record) => resolveCommercialCategoryId(record) === id,
+}));
+
+// Display-order overrides for sub-category rails/catalog, keyed by parent.
+//
+// IMPORTANT: this is presentation only. `extractSubcategories()` resolves a
+// plugin's bucket via `SUBCATEGORIES.find(...)`, so the *array order* below is
+// the matching precedence and must stay stable — reordering it would re-bucket
+// overlapping-tag plugins (e.g. a `dashboard`+`design` plugin would flip from
+// Dashboards to Brand / design). To change only the order chips/cards appear
+// in — without touching which bucket a plugin lands in — list the parent's
+// slugs here in the desired display order. Any slug not listed keeps its
+// natural `SUBCATEGORIES` order behind the explicitly-ordered ones.
+const SUBCATEGORY_DISPLAY_ORDER: Record<string, readonly string[]> = {
+  prototype: [
+    'landing-marketing',
+    'brand-design',
+    'business-dashboards',
+    'app-prototypes',
+    'developer-tools',
+    'docs-reports',
+  ],
+  // Deck order is the commercial-priority order declared above.
+  deck: DECK_COMMERCIAL_ORDER,
+};
+
+function orderSubcategoriesForDisplay(parent: string, options: FacetOption[]): FacetOption[] {
+  const order = SUBCATEGORY_DISPLAY_ORDER[parent];
+  if (!order) return options;
+  const rank = (slug: string) => {
+    const index = order.indexOf(slug);
+    return index === -1 ? order.length : index;
+  };
+  // Stable sort: explicitly-ordered slugs float to the front in the configured
+  // order; everything else keeps its original relative position behind them.
+  return options
+    .map((option, index) => ({ option, index }))
+    .sort((a, b) => rank(a.option.slug) - rank(b.option.slug) || a.index - b.index)
+    .map((entry) => entry.option);
+}
+
 // Scene child buckets based on the Feishu prompt taxonomy. HyperFrames
 // and Audio intentionally have no children, so selecting them keeps the
 // section flat.
+//
+// NOTE: array order here is matching precedence (see SUBCATEGORY_DISPLAY_ORDER
+// above), NOT the on-screen order. Keep it stable.
 const SUBCATEGORIES: readonly SubcategoryDef[] = [
   {
     parent: 'prototype',
@@ -296,106 +407,9 @@ const SUBCATEGORIES: readonly SubcategoryDef[] = [
       'brand',
     ),
   },
-  {
-    parent: 'deck',
-    slug: 'pitch-business',
-    label: 'Pitch / business',
-    starterPrompt: 'Create an Open Design deck plugin for fundraising, business plans, investor decks, or strategic narratives.',
-    test: byAnySlug(
-      'pitch-deck',
-      'pitch',
-      'fundraising',
-      'seed-round',
-      'investor-deck',
-      'vc-deck',
-      'business-plan',
-      'b2b-saas-pitch',
-      'founder-vision-deck',
-    ),
-  },
-  {
-    parent: 'deck',
-    slug: 'course-training',
-    label: 'Course / training',
-    starterPrompt: 'Create an Open Design deck plugin for courses, training materials, workshops, or classroom slides.',
-    test: byAnySlug(
-      'course-module',
-      'course-slides',
-      'training-deck',
-      'workshop',
-      'lesson',
-      'education',
-      'classroom',
-    ),
-  },
-  {
-    parent: 'deck',
-    slug: 'reports-briefings',
-    label: 'Reports / briefings',
-    starterPrompt: 'Create an Open Design deck plugin for weekly reports, management briefings, white papers, or business reviews.',
-    test: byAnySlug(
-      'weekly-report',
-      'status-update',
-      'team-report',
-      'business-review',
-      'white-paper',
-      'investment-thesis',
-      'consulting-deliverable',
-      'financial',
-      'data-viz-launch',
-    ),
-  },
-  {
-    parent: 'deck',
-    slug: 'product-sales',
-    label: 'Product / sales',
-    starterPrompt: 'Create an Open Design deck plugin for product launches, sales enablement, feature reveals, or customer pitches.',
-    test: byAnySlug(
-      'product-launch',
-      'launch-deck',
-      'feature-reveal',
-      'launch-slides',
-      'sales',
-      'customer',
-      'product',
-    ),
-  },
-  {
-    parent: 'deck',
-    slug: 'engineering-talks',
-    label: 'Engineering talks',
-    starterPrompt: 'Create an Open Design deck plugin for technical presentations, architecture walkthroughs, or dev workflow talks.',
-    test: byAnySlug(
-      'engineering',
-      'tech-sharing',
-      'tech-talk',
-      'technical-presentation',
-      'system-design',
-      'architecture',
-      'developer-tutorial',
-      'dev-workflow',
-      'incident',
-      'red-team',
-      'risk-review',
-    ),
-  },
-  {
-    parent: 'deck',
-    slug: 'creative-decks',
-    label: 'Creative decks',
-    starterPrompt: 'Create an Open Design deck plugin for creative, editorial, brand, social, or visual storytelling decks.',
-    test: byAnySlug(
-      'marketing',
-      'editorial',
-      'zhangzara',
-      'creative-agency-pitch',
-      'brand-manifesto',
-      'fashion-brand-deck',
-      'creator-portfolio',
-      'xhs',
-      'design-studio-deck',
-    ),
-  },
+  // Deck scenes are the 15 commercial "品类" buckets (generated above), keyed by
+  // the plugin's resolved commercial category rather than tag-slug heuristics.
+  ...DECK_SUBCATEGORIES,
   {
     parent: 'image',
     slug: 'ui-product-mockups',
@@ -563,7 +577,10 @@ export function buildSubcategoryCatalog(plugins: InstalledPluginRecord[]): Recor
         starterPrompt: c.starterPrompt,
         count: counts.get(`${category.slug}:${c.slug}`) ?? 0,
       }));
-    if (options.length > 0) acc[category.slug] = options;
+    if (options.length > 0) {
+      // Presentation order only; bucket membership is fixed by SUBCATEGORIES.
+      acc[category.slug] = orderSubcategoriesForDisplay(category.slug, options);
+    }
     return acc;
   }, {});
 }
@@ -603,6 +620,7 @@ export function isFeaturedPlugin(record: InstalledPluginRecord): boolean {
 export function filterByQuery(
   plugins: InstalledPluginRecord[],
   query: string,
+  locale?: string,
 ): InstalledPluginRecord[] {
   const q = query.trim().toLowerCase();
   if (!q) return plugins;
@@ -611,8 +629,10 @@ export function filterByQuery(
   return plugins.filter((p) => {
     const haystack = [
       p.title ?? '',
+      resolveLocalizedText(localizedText(p.manifest?.title_i18n), locale),
       p.id,
       p.manifest?.description ?? '',
+      resolveLocalizedText(localizedText(p.manifest?.description_i18n), locale),
       (p.manifest?.tags ?? []).join(' '),
     ]
       .join(' ')
@@ -624,7 +644,7 @@ export function filterByQuery(
 // Smart default selection. Lead with the first artifact kind in the
 // Home creation flow while keeping all prototype scenes visible.
 export const PREFERRED_DEFAULT_SELECTION: FacetSelection = {
-  category: 'prototype',
+  category: 'deck',
   subcategory: null,
 };
 

@@ -19,40 +19,54 @@
 // same callback wiring.
 
 import type { InstalledPluginRecord } from '@open-design/contracts';
+import { createPortal } from 'react-dom';
 import { inferPluginPreview } from './plugins-home/preview';
 import { PluginScenarioDetail } from './plugin-details/PluginScenarioDetail';
 import { PluginExampleDetail } from './plugin-details/PluginExampleDetail';
 import { PluginDesignSystemDetail } from './plugin-details/PluginDesignSystemDetail';
 import { PluginMediaDetail } from './plugin-details/PluginMediaDetail';
+import type { PluginUseAction } from './plugins-home/useActions';
+import type { PreviewSharePopoverItem } from './PreviewModal';
 
 interface Props {
   record: InstalledPluginRecord;
   onClose: () => void;
-  onUse: (record: InstalledPluginRecord) => void;
+  onUse: (record: InstalledPluginRecord, action: PluginUseAction) => void;
+  onDuplicate?: (record: InstalledPluginRecord) => void;
   isApplying?: boolean;
+  hideUseAction?: boolean;
+  // Analytics — fires when the user picks an item inside the PreviewModal
+  // share popover (media / html / design variants only; the scenario
+  // fallback has no share popover).
+  onSharePopoverItemClick?: (item: PreviewSharePopoverItem) => void;
 }
 
 export function PluginDetailsModal({
   record,
   onClose,
   onUse,
+  onDuplicate,
   isApplying,
+  hideUseAction,
+  onSharePopoverItemClick,
 }: Props) {
   const preview = inferPluginPreview(record);
+  let detail: JSX.Element;
 
   if (preview.kind === 'media') {
-    return (
+    detail = (
       <PluginMediaDetail
         record={record}
         onClose={onClose}
         onUse={onUse}
+        onDuplicate={onDuplicate}
         isApplying={isApplying}
+        hideUseAction={hideUseAction}
+        onSharePopoverItemClick={onSharePopoverItemClick}
       />
     );
-  }
-
-  if (preview.kind === 'html') {
-    return (
+  } else if (preview.kind === 'html') {
+    detail = (
       <PluginExampleDetail
         record={record}
         exampleStem={
@@ -60,28 +74,37 @@ export function PluginDetailsModal({
         }
         onClose={onClose}
         onUse={onUse}
+        onDuplicate={onDuplicate}
         isApplying={isApplying}
+        hideUseAction={hideUseAction}
+        onSharePopoverItemClick={onSharePopoverItemClick}
       />
     );
-  }
-
-  if (preview.kind === 'design') {
-    return (
+  } else if (preview.kind === 'design') {
+    detail = (
       <PluginDesignSystemDetail
         record={record}
         onClose={onClose}
         onUse={onUse}
+        onDuplicate={onDuplicate}
         isApplying={isApplying}
+        hideUseAction={hideUseAction}
+        onSharePopoverItemClick={onSharePopoverItemClick}
+      />
+    );
+  } else {
+    detail = (
+      <PluginScenarioDetail
+        record={record}
+        onClose={onClose}
+        onUse={onUse}
+        onDuplicate={onDuplicate}
+        isApplying={isApplying}
+        hideUseAction={hideUseAction}
       />
     );
   }
 
-  return (
-    <PluginScenarioDetail
-      record={record}
-      onClose={onClose}
-      onUse={onUse}
-      isApplying={isApplying}
-    />
-  );
+  if (typeof document === 'undefined') return detail;
+  return createPortal(detail, document.body);
 }

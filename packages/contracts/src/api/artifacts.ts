@@ -22,7 +22,7 @@ export type ArtifactRendererId =
   | 'mini-app'
   | 'design-system';
 
-export type ArtifactExportKind = 'html' | 'pdf' | 'zip' | 'pptx' | 'jsx' | 'md' | 'svg' | 'txt';
+export type ArtifactExportKind = 'html' | 'pdf' | 'zip' | 'jsx' | 'md' | 'svg' | 'txt';
 
 export type ArtifactStatus = 'streaming' | 'complete' | 'error';
 
@@ -100,9 +100,14 @@ export interface ArtifactManifest {
   /**
    * Optional for backward compatibility with pre-streaming artifacts.
    * Daemon/web manifest normalization defaults missing values to "complete".
-   */
+  */
   status?: ArtifactStatus;
   exports: ArtifactExportKind[];
+  /**
+   * Optional primary entry hint for multi-file outputs. When omitted, clients
+   * may fall back to renderable-file heuristics.
+   */
+  primary?: string | boolean;
   supportingFiles?: string[];
   createdAt?: string;
   updatedAt?: string;

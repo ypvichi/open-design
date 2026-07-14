@@ -17,7 +17,9 @@ import {
   createSnapshot,
   getSnapshot,
   linkSnapshotToRun,
+  linkSnapshotToProject,
   markSnapshotStale,
+  restoreProjectSnapshotLink,
 } from '../src/plugins/snapshots.js';
 
 let db: Database.Database;
@@ -93,6 +95,17 @@ describe('snapshots writer', () => {
     expect(fetched!.status).toBe('fresh');
   });
 
+  it('persists apply-time craft requirements on the immutable snapshot', () => {
+    db.prepare('INSERT INTO projects (id, name) VALUES (?, ?)').run('project-1', 'Project 1');
+    const snap = createSnapshot(db, baseInput({
+      craftRequires: ['typography', 'color', 'anti-ai-slop'],
+    }));
+
+    const fetched = getSnapshot(db, snap.snapshotId);
+
+    expect(fetched?.craftRequires).toEqual(['typography', 'color', 'anti-ai-slop']);
+  });
+
   it('linkSnapshotToRun pins expires_at to NULL', () => {
     db.prepare('INSERT INTO projects (id, name) VALUES (?, ?)').run('project-1', 'Project 1');
     const snap = createSnapshot(db, baseInput());
@@ -104,6 +117,37 @@ describe('snapshots writer', () => {
     const after = db.prepare('SELECT run_id, expires_at FROM applied_plugin_snapshots WHERE id = ?').get(snap.snapshotId) as { run_id: string; expires_at: number | null };
     expect(after.run_id).toBe('run-1');
     expect(after.expires_at).toBeNull();
+  });
+
+  it('restoreProjectSnapshotLink makes an unlinked discarded snapshot expirable again', () => {
+    db.prepare('INSERT INTO projects (id, name) VALUES (?, ?)').run('project-1', 'Project 1');
+    const previous = createSnapshot(db, baseInput({ query: 'Previous {{topic}}' }));
+    linkSnapshotToProject(db, previous.snapshotId, 'project-1');
+    const discarded = createSnapshot(db, baseInput({ query: 'Discarded {{topic}}' }));
+    linkSnapshotToProject(db, discarded.snapshotId, 'project-1');
+
+    restoreProjectSnapshotLink(
+      db,
+      'project-1',
+      discarded.snapshotId,
+      previous.snapshotId,
+      'run-that-was-never-linked',
+    );
+
+    const project = db.prepare(
+      `SELECT applied_plugin_snapshot_id AS appliedPluginSnapshotId
+         FROM projects
+        WHERE id = ?`,
+    ).get('project-1') as { appliedPluginSnapshotId: string | null };
+    const discardedRow = db.prepare(
+      `SELECT run_id AS runId, expires_at AS expiresAt
+         FROM applied_plugin_snapshots
+        WHERE id = ?`,
+    ).get(discarded.snapshotId) as { runId: string | null; expiresAt: number | null };
+
+    expect(project.appliedPluginSnapshotId).toBe(previous.snapshotId);
+    expect(discardedRow.runId).toBeNull();
+    expect(discardedRow.expiresAt).not.toBeNull();
   });
 
   it('markSnapshotStale flips status', () => {

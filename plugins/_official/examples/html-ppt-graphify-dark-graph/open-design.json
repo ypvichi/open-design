@@ -2,9 +2,19 @@
   "$schema": "https://open-design.ai/schemas/plugin.v1.json",
   "specVersion": "1.0.0",
   "name": "example-html-ppt-graphify-dark-graph",
-  "title": "Html Ppt Graphify Dark Graph",
+  "title": "Write a Feature Business Case like a Principal PM",
+  "title_i18n": {
+    "en": "Write a Feature Business Case like a Principal PM",
+    "zh-CN": "像 Principal PM 一样写功能商业论证",
+    "zh-TW": "像 Principal PM 一样写功能商业论证"
+  },
   "version": "0.1.0",
-  "description": "暗底知识图谱 deck — #06060c→#0e1020 深夜渐变 + 漂浮 blur orbs、封面 SVG 力导向图谱、彩虹渐变标题、JetBrains Mono 命令行高亮、glass-morphism 卡片。适合 dev-tool / CLI / 知识图谱 / 数据可视化的发布会，\"AI-native + 科幻 + 暖色\" 调子。",
+  "description": "Open Design's feature business case for the plugin marketplace: the user pain, options, tradeoffs, and the measure of success. Built as a decision-grade product management deck for PM, eng, design, leadership.",
+  "description_i18n": {
+    "en": "Open Design's feature business case for the plugin marketplace: the user pain, options, tradeoffs, and the measure of success. Built as a decision-grade product management deck for PM, eng, design, leadership.",
+    "zh-CN": "像 Principal PM 一样写功能商业论证——一份可商业交付的产品管理 Deck，围绕真实主题、证据链与决策目标组织。",
+    "zh-TW": "像 Principal PM 一样写功能商业论证——一份可商业交付的产品管理 Deck，围绕真实主题、证据链与决策目标组织。"
+  },
   "license": "MIT",
   "author": {
     "name": "Open Design",
@@ -22,7 +32,19 @@
     "dark-graph",
     "dev-tool-launch",
     "cli-launch",
-    "data-viz-launch"
+    "data-viz-launch",
+    "ai",
+    "copilot",
+    "workflow",
+    "html-ppt-graphify-dark-graph",
+    "enterprise-ai-literacy",
+    "product-management",
+    "pm-feature-business-case-deck",
+    "product",
+    "roadmap",
+    "architecture",
+    "decision-deck",
+    "commercial-slide-agent"
   ],
   "compat": {
     "agentSkills": [
@@ -35,7 +57,7 @@
     "kind": "scenario",
     "taskKind": "new-generation",
     "mode": "deck",
-    "scenario": "engineering",
+    "scenario": "product",
     "surface": "web",
     "preview": {
       "type": "html",
@@ -43,13 +65,18 @@
     },
     "useCase": {
       "query": {
-        "en": "Use the html-ppt-graphify-dark-graph template to create a dev-tool launch deck. Use a late-night gradient background, force-directed graph cover, rainbow headline, and JetBrains Mono command-line styling. First confirm the tool name, core capabilities, demo steps, and whether the CLI should be typed live.",
-        "zh-CN": "用 html-ppt-graphify-dark-graph 模板做一份 dev-tool 发布会 PPT。深夜渐变背景 + 力导向图谱封面 + 彩虹标题 + JetBrains Mono 命令行。先确认：工具名、核心能力、demo 步骤；要不要现场敲 CLI。"
+        "en": "Create \"Write a Feature Business Case like a Principal PM\" as a decision-grade Product management deck in this template's own visual system. Subject: Open Design's feature business case for the plugin marketplace: the user pain, options, tradeoffs, and the measure of success. Audience: PM, eng, design, leadership. First ask only for missing essentials: audience, decision target, source-of-truth materials, deadline, and must-keep numbers. Then produce the slide plan, written slides, visual direction, speaker-ready structure, and a critic pass against this rubric: can cross-functional reviewers agree on the next irreversible step.",
+        "zh-CN": "像 Principal PM 一样写功能商业论证。像 Principal PM 一样写功能商业论证——一份可商业交付的产品管理 Deck，围绕真实主题、证据链与决策目标组织。 主题：Open Design's feature business case for the plugin marketplace: the user pain, options, tradeoffs, and the measure of success. 先确认受众、决策目标、素材来源、截止时间和必须保留的数据，再输出叙事主线、页面规划、逐页文案、视觉方向和按评审标准自检的版本。"
       },
       "exampleOutputs": [
         {
           "path": "./example.html",
-          "title": "Html Ppt Graphify Dark Graph"
+          "title": "Write a Feature Business Case like a Principal PM",
+          "title_i18n": {
+            "en": "Write a Feature Business Case like a Principal PM",
+            "zh-CN": "像 Principal PM 一样写功能商业论证",
+            "zh-TW": "像 Principal PM 一样写功能商业论证"
+          }
         }
       ]
     },
@@ -77,6 +104,7 @@
     "capabilities": [
       "prompt:inject",
       "fs:write"
-    ]
+    ],
+    "category": "product-management"
   }
 }

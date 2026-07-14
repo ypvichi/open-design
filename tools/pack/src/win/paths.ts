@@ -43,8 +43,10 @@ export function resolveWinPaths(config: ToolPackConfig): WinPaths {
     exePath: join(namespaceRoot, "builder", `${PRODUCT_NAME}-${namespaceToken}.exe`),
     installDir,
     installedExePath: join(installDir, `${PRODUCT_NAME}.exe`),
-    installerPayloadPath: join(namespaceRoot, "installer", "payload.7z"),
+    installerBasePayloadPath: join(namespaceRoot, "installer", "payload-base.7z"),
+    installerOverlayPayloadPath: join(namespaceRoot, "installer", "payload-overlay.7z"),
     installerScriptPath: join(namespaceRoot, "installer", "installer.nsi"),
+    launcherPayloadPath: join(namespaceRoot, "payload", `${PRODUCT_NAME}-${namespaceToken}-payload.7z`),
     publicDesktopShortcutPath: join(process.env.PUBLIC ?? join(dirname(homedir()), "Public"), "Desktop", identity.shortcutName),
     installMarkerPath: join(namespaceRoot, "logs", "install.marker.json"),
     installTimingPath: join(namespaceRoot, "logs", "install.timing.json"),
@@ -56,6 +58,7 @@ export function resolveWinPaths(config: ToolPackConfig): WinPaths {
     packagedMainPrebundlePath: join(namespaceRoot, "assembled", WIN_PREBUNDLED_PACKAGED_MAIN_RELATIVE_PATH),
     resourceRoot: join(namespaceRoot, "resources", "open-design"),
     setupPath: join(namespaceRoot, "builder", `${PRODUCT_NAME}-${namespaceToken}-setup.exe`),
+    setupZipPath: join(namespaceRoot, "builder", `${PRODUCT_NAME}-${namespaceToken}-portable.zip`),
     startMenuShortcutPath: join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "Microsoft", "Windows", "Start Menu", "Programs", identity.shortcutName),
     tarballsRoot: join(namespaceRoot, "tarballs"),
     userDesktopShortcutPath: join(homedir(), "Desktop", identity.shortcutName),
@@ -91,6 +94,10 @@ export function resolveWinLocalDataRoot(config: ToolPackConfig): string {
 export async function createWinRemovalPlan(config: ToolPackConfig): Promise<WinRemovalTarget[]> {
   const runtimeRoot = config.roots.runtime.namespaceRoot;
   const targets: Array<Omit<WinRemovalTarget, "exists">> = [
+    { path: join(runtimeRoot, "cache"), scope: "cache", willRemove: config.removeCache === true },
+    { path: join(runtimeRoot, "updates", "downloads"), scope: "cache", willRemove: config.removeCache === true },
+    { path: join(runtimeRoot, "updates", "releases"), scope: "cache", willRemove: config.removeCache === true },
+    { path: join(runtimeRoot, "updates", "staging"), scope: "cache", willRemove: config.removeCache === true },
     { path: join(runtimeRoot, "data"), scope: "data", willRemove: config.removeData },
     { path: join(runtimeRoot, "logs"), scope: "logs", willRemove: config.removeLogs },
     { path: join(runtimeRoot, "runtime"), scope: "sidecars", willRemove: config.removeSidecars },

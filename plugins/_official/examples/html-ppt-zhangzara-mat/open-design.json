@@ -2,9 +2,19 @@
   "$schema": "https://open-design.ai/schemas/plugin.v1.json",
   "specVersion": "1.0.0",
   "name": "example-html-ppt-zhangzara-mat",
-  "title": "Html Ppt Zhangzara Mat",
+  "title": "Write a Margin-Recovery Final Deck like a McKinsey Engagement Manager",
+  "title_i18n": {
+    "en": "Write a Margin-Recovery Final Deck like a McKinsey Engagement Manager",
+    "zh-CN": "像麦肯锡项目经理一样写利润率修复终稿",
+    "zh-TW": "像麦肯锡项目经理一样写利润率修复终稿"
+  },
   "version": "0.1.0",
-  "description": "Mat — Dark sage canvas with bone paper and burnt-orange accent; mid-century modern with wood undertones. Anything that should feel mid-century, tactile, and intentional: design studio credentials, architecture / interior brands, ceramics / craft / furniture, advisory decks.",
+  "description": "A margin-recovery diagnosis for a regional grocery chain — the governing thought, the driver tree, the priorities, and the roadmap. Built as a decision-grade consulting deck for client sponsor, steering committee.",
+  "description_i18n": {
+    "en": "A margin-recovery diagnosis for a regional grocery chain — the governing thought, the driver tree, the priorities, and the roadmap. Built as a decision-grade consulting deck for client sponsor, steering committee.",
+    "zh-CN": "像麦肯锡项目经理一样写利润率修复终稿——一份可商业交付的咨询交付 Deck，围绕真实主题、证据链与决策目标组织。",
+    "zh-TW": "像麦肯锡项目经理一样写利润率修复终稿——一份可商业交付的咨询交付 Deck，围绕真实主题、证据链与决策目标组织。"
+  },
   "license": "MIT",
   "author": {
     "name": "Open Design",
@@ -27,7 +37,18 @@
     "architecture-interior-brand",
     "html-deck",
     "html-slides",
-    "zhangzara"
+    "zhangzara",
+    "design",
+    "brand",
+    "visual-system",
+    "html-ppt-zhangzara-mat",
+    "consulting",
+    "consulting-final-deck",
+    "strategy",
+    "consulting-deliverable",
+    "client",
+    "decision-deck",
+    "commercial-slide-agent"
   ],
   "compat": {
     "agentSkills": [
@@ -40,7 +61,7 @@
     "kind": "scenario",
     "taskKind": "new-generation",
     "mode": "deck",
-    "scenario": "marketing",
+    "scenario": "strategy",
     "surface": "web",
     "preview": {
       "type": "html",
@@ -48,13 +69,18 @@
     },
     "useCase": {
       "query": {
-        "en": "Mat — Dark sage canvas with bone paper and burnt-orange accent; mid-century modern with wood undertones. Anything that should feel mid-century, tactile, and intentional: design studio credentials, architecture / interior brands, ceramics / craft / furniture, advisory decks.",
-        "zh-CN": "使用这个插件完成以下任务：Mat — Dark sage canvas with bone paper and burnt-orange accent; mid-century modern with wood undertones. Anything that should feel mid-century, tactile, and intentional: design studio credentials, architecture / interior brands, ceramics / craft / furniture, advisory decks."
+        "en": "Create \"Write a Margin-Recovery Final Deck like a McKinsey Engagement Manager\" as a decision-grade Consulting deck in this template's own visual system. Subject: A margin-recovery diagnosis for a regional grocery chain — the governing thought, the driver tree, the priorities, and the roadmap. Audience: client sponsor, steering committee. First ask only for missing essentials: audience, decision target, source-of-truth materials, deadline, and must-keep numbers. Then produce the slide plan, written slides, visual direction, speaker-ready structure, and a critic pass against this rubric: would a client know what to do Monday morning.",
+        "zh-CN": "像麦肯锡项目经理一样写利润率修复终稿。像麦肯锡项目经理一样写利润率修复终稿——一份可商业交付的咨询交付 Deck，围绕真实主题、证据链与决策目标组织。 主题：A margin-recovery diagnosis for a regional grocery chain — the governing thought, the driver tree, the priorities, and the roadmap. 先确认受众、决策目标、素材来源、截止时间和必须保留的数据，再输出叙事主线、页面规划、逐页文案、视觉方向和按评审标准自检的版本。"
       },
       "exampleOutputs": [
         {
           "path": "./example.html",
-          "title": "Html Ppt Zhangzara Mat"
+          "title": "Write a Margin-Recovery Final Deck like a McKinsey Engagement Manager",
+          "title_i18n": {
+            "en": "Write a Margin-Recovery Final Deck like a McKinsey Engagement Manager",
+            "zh-CN": "像麦肯锡项目经理一样写利润率修复终稿",
+            "zh-TW": "像麦肯锡项目经理一样写利润率修复终稿"
+          }
         }
       ]
     },
@@ -82,6 +108,7 @@
     "capabilities": [
       "prompt:inject",
       "fs:write"
-    ]
+    ],
+    "category": "consulting"
   }
 }

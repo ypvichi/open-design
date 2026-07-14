@@ -2,9 +2,19 @@
   "$schema": "https://open-design.ai/schemas/plugin.v1.json",
   "specVersion": "1.0.0",
   "name": "example-html-ppt-zhangzara-peoples-platform",
-  "title": "Html Ppt Zhangzara Peoples Platform",
+  "title": "Make a Public-Transit Funding Case like a Transportation Policy Lead",
+  "title_i18n": {
+    "en": "Make a Public-Transit Funding Case like a Transportation Policy Lead",
+    "zh-CN": "像交通政策负责人一样做公共交通投资论证",
+    "zh-TW": "像交通政策负责人一样做公共交通投资论证"
+  },
   "version": "0.1.0",
-  "description": "People's Platform (Block & Bold) — Activist poster energy: blue, orange, red on cream, with Alfa Slab + Caveat Brush. Anything that should feel honest, loud, and graphic: cultural commentary, manifestos, civic and community decks, design talks, campaign pitches.",
+  "description": "A public-transit funding proposal for a city council — ridership need, the plan, the risk controls, and the ask. Built as a decision-grade policy briefing deck for city council, public board.",
+  "description_i18n": {
+    "en": "A public-transit funding proposal for a city council — ridership need, the plan, the risk controls, and the ask. Built as a decision-grade policy briefing deck for city council, public board.",
+    "zh-CN": "像交通政策负责人一样做公共交通投资论证——一份可商业交付的政策简报 Deck，围绕真实主题、证据链与决策目标组织。",
+    "zh-TW": "像交通政策负责人一样做公共交通投资论证——一份可商业交付的政策简报 Deck，围绕真实主题、证据链与决策目标组织。"
+  },
   "license": "MIT",
   "author": {
     "name": "Open Design",
@@ -28,7 +38,19 @@
     "manifesto",
     "html-deck",
     "html-slides",
-    "zhangzara"
+    "zhangzara",
+    "pitch-deck",
+    "fundraising",
+    "investor-deck",
+    "finance",
+    "html-ppt-zhangzara-peoples-platform",
+    "government-policy",
+    "policy-briefing-deck",
+    "policy",
+    "regulatory",
+    "risk-review",
+    "decision-deck",
+    "commercial-slide-agent"
   ],
   "compat": {
     "agentSkills": [
@@ -41,7 +63,7 @@
     "kind": "scenario",
     "taskKind": "new-generation",
     "mode": "deck",
-    "scenario": "marketing",
+    "scenario": "policy",
     "surface": "web",
     "preview": {
       "type": "html",
@@ -49,13 +71,18 @@
     },
     "useCase": {
       "query": {
-        "en": "People's Platform (Block & Bold) — Activist poster energy: blue, orange, red on cream, with Alfa Slab + Caveat Brush. Anything that should feel honest, loud, and graphic: cultural commentary, manifestos, civic and community decks, design talks, campaign pitches.",
-        "zh-CN": "使用这个插件完成以下任务：People's Platform (Block & Bold) — Activist poster energy: blue, orange, red on cream, with Alfa Slab + Caveat Brush. Anything that should feel honest, loud, and graphic: cultural commentary, manifestos, civic and community decks, design talks, campaign pitches."
+        "en": "Create \"Make a Public-Transit Funding Case like a Transportation Policy Lead\" as a decision-grade Government & policy deck in this template's own visual system. Subject: A public-transit funding proposal for a city council — ridership need, the plan, the risk controls, and the ask. Audience: city council, public board. First ask only for missing essentials: audience, decision target, source-of-truth materials, deadline, and must-keep numbers. Then produce the slide plan, written slides, visual direction, speaker-ready structure, and a critic pass against this rubric: does the deck reduce approval risk rather than create rhetorical heat.",
+        "zh-CN": "像交通政策负责人一样做公共交通投资论证。像交通政策负责人一样做公共交通投资论证——一份可商业交付的政策简报 Deck，围绕真实主题、证据链与决策目标组织。 主题：A public-transit funding proposal for a city council — ridership need, the plan, the risk controls, and the ask. 先确认受众、决策目标、素材来源、截止时间和必须保留的数据，再输出叙事主线、页面规划、逐页文案、视觉方向和按评审标准自检的版本。"
       },
       "exampleOutputs": [
         {
           "path": "./example.html",
-          "title": "Html Ppt Zhangzara Peoples Platform"
+          "title": "Make a Public-Transit Funding Case like a Transportation Policy Lead",
+          "title_i18n": {
+            "en": "Make a Public-Transit Funding Case like a Transportation Policy Lead",
+            "zh-CN": "像交通政策负责人一样做公共交通投资论证",
+            "zh-TW": "像交通政策负责人一样做公共交通投资论证"
+          }
         }
       ]
     },
@@ -84,6 +111,7 @@
     "capabilities": [
       "prompt:inject",
       "fs:write"
-    ]
+    ],
+    "category": "government-policy"
   }
 }

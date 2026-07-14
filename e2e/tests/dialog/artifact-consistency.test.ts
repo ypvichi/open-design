@@ -7,10 +7,11 @@ import { chromium, expect as playwrightExpect, type Browser, type Page } from '@
 import { afterEach, describe, expect, test } from 'vitest';
 
 import { createFakeAgentRuntimes } from '@/fake-agents';
+import { T } from '@/timeouts';
 import type { ProjectFile } from '@/vitest/artifacts';
 import { requestJson, requestText } from '@/vitest/http';
 import { listMessages, type E2eChatMessage } from '@/vitest/messages';
-import { createSmokeSuite } from '@/vitest/smoke-suite';
+import { createSmokeSuite } from '@/vitest/suite';
 
 const PROMPT = 'Create a deterministic smoke artifact';
 const FILE_NAME = 'real-daemon-smoke.html';
@@ -93,15 +94,11 @@ describe('dialog artifact consistency', () => {
       }, { key: STORAGE_KEY, codexEnv: fakeAgents.codex.env });
 
       const page = await context.newPage();
+      page.setDefaultNavigationTimeout(T.xlong);
       await page.goto('/', { waitUntil: 'domcontentloaded' });
-      await playwrightExpect(
-        page.getByRole('heading', { name: 'What do you want to design?' }),
-      ).toBeVisible();
-      await page.evaluate(({ projectId, conversationId }) => {
-        const target = `/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}`;
-        window.history.pushState(null, '', target);
-        window.dispatchEvent(new PopStateEvent('popstate'));
-      }, { projectId: project.project.id, conversationId: project.conversationId });
+      await waitForLoadingToClear(page);
+      const target = `/projects/${encodeURIComponent(project.project.id)}/conversations/${encodeURIComponent(project.conversationId)}`;
+      await page.goto(target, { waitUntil: 'domcontentloaded' });
       await expectWorkspaceReady(page);
 
       const createRunResponse = await sendPrompt(page, PROMPT);
@@ -210,7 +207,7 @@ async function sendPrompt(page: Page, prompt: string) {
   await playwrightExpect(input).toBeVisible({ timeout: 5_000 });
   await input.click();
   await input.fill(prompt);
-  await playwrightExpect(input).toHaveValue(prompt);
+  await playwrightExpect(input).toHaveText(prompt);
   await playwrightExpect(sendButton).toBeEnabled();
   const responsePromise = page.waitForResponse((response) => {
     const url = new URL(response.url());
@@ -227,17 +224,25 @@ async function waitForProjectFile(
   projectId: string,
   fileName: string,
 ): Promise<ProjectFile> {
-  let latest: ProjectFile[] = [];
+  let latest: ProjectFile | undefined;
   await expect.poll(async () => {
     const response = await requestJson<{ files: ProjectFile[] }>(
       webUrl,
       `/api/projects/${encodeURIComponent(projectId)}/files`,
     );
-    latest = response.files;
-    return response.files.some((file) => file.name === fileName);
-  }, { timeout: 30_000 }).toBe(true);
+    latest = response.files.find((file) => file.name === fileName);
+    return {
+      entry: latest?.artifactManifest?.entry ?? null,
+      name: latest?.name ?? null,
+      title: latest?.artifactManifest?.title ?? null,
+    };
+  }, { timeout: 30_000 }).toEqual({
+    entry: fileName,
+    name: fileName,
+    title: HEADING,
+  });
 
-  const file = latest.find((candidate) => candidate.name === fileName);
+  const file = latest;
   if (!file) throw new Error(`project file ${fileName} did not remain listed`);
   return file;
 }

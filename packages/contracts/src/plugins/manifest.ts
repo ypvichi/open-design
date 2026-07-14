@@ -141,8 +141,10 @@ export const PluginManifestSchema = z.object({
   specVersion: OpenDesignSpecVersionSchema.optional(),
   name:        z.string().min(1).regex(/^[a-z0-9][a-z0-9._-]*$/),
   title:       z.string().optional(),
+  title_i18n:  LocalizedTextSchema.optional(),
   version:     z.string().min(1),
   description: z.string().optional(),
+  description_i18n: LocalizedTextSchema.optional(),
   author:   z.object({
     name: z.string().optional(),
     url:  z.string().optional(),
@@ -170,6 +172,10 @@ export const PluginManifestSchema = z.object({
       poster: z.string().optional(),
       video:  z.string().optional(),
       gif:    z.string().optional(),
+      // How the gallery bakes this HTML preview's hover clip: 'scroll' (vertical
+      // pan), 'deck' (walk a horizontal slideshow), 'static' (hold a single
+      // screen). Omit to auto-detect from the page's scroll height.
+      motion: z.enum(['scroll', 'deck', 'static']).optional(),
     }).passthrough().optional(),
     useCase: z.object({
       query: z.union([z.string(), LocalizedTextSchema]).optional(),

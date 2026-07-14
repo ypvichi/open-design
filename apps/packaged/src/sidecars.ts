@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, open, type FileHandle } from "node:fs/promises";
+import { access, appendFile, mkdir, open, type FileHandle } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -23,6 +23,9 @@ import {
 } from "@open-design/sidecar";
 import {
   createProcessStampArgs,
+  isProcessAlive,
+  mergeProxyAwareEnv,
+  resolveSystemProxyEnv,
   stopProcesses,
   waitForProcessExit,
   wellKnownUserToolchainBins,
@@ -39,10 +42,16 @@ const PACKAGED_CHILD_ENV_ALLOWLIST = [
   "LANG",
   "LC_ALL",
   "LOGNAME",
+  "ALL_PROXY",
+  "NODE_USE_ENV_PROXY",
   "NO_PROXY",
   "TMPDIR",
   "USER",
   "VP_HOME",
+  "all_proxy",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
 ] as const;
 
 function shouldForwardPackagedChildEnv(key: string, includeProviderSecrets = false): boolean {
@@ -65,11 +74,23 @@ type ManagedSidecarChild = {
   child: ChildProcess;
   ipcPath: string;
   logHandle: FileHandle;
+  logPath: string;
 };
 
 type PackagedDaemonManagedPathEnv = {
   OD_DATA_DIR: string;
   OD_RESOURCE_ROOT: string;
+  /**
+   * Channel-root path. Lives one level above the namespaces directory so
+   * the daemon can persist installationId (and any future fields that
+   * must outlive a namespace-scoped data-dir reset) outside the
+   * `<namespace>/data/` subtree.
+   *
+   * Required so PostHog person identity survives a reinstall of the same
+   * channel even when the baked namespace token changes or per-namespace
+   * data is cleared. See `apps/daemon/src/installation.ts`.
+   */
+  OD_INSTALLATION_DIR: string;
 };
 
 function resolveSidecarEntry(packageName: string, exportName: string): string {
@@ -80,31 +101,97 @@ function logPathFor(paths: PackagedNamespacePaths, app: AppKey): string {
   return join(paths.logsRoot, app, "latest.log");
 }
 
+async function appendSidecarLifecycleLog(logPath: string, message: string): Promise<void> {
+  await mkdir(dirname(logPath), { recursive: true });
+  await appendFile(logPath, `${message}\n`, "utf8").catch(() => undefined);
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function resolvePackagedElectronNodeCommand(
+  execPath = process.execPath,
+  platform = process.platform,
+): Promise<string> {
+  if (platform !== "darwin") return execPath;
+
+  const executableName = execPath.split("/").pop();
+  if (executableName == null || executableName.length === 0) return execPath;
+
+  const marker = "/Contents/MacOS/";
+  const markerIndex = execPath.lastIndexOf(marker);
+  if (markerIndex === -1) return execPath;
+
+  const appPath = execPath.slice(0, markerIndex);
+  const helperName = `${executableName} Helper`;
+  const helperPath = join(
+    appPath,
+    "Contents",
+    "Frameworks",
+    `${helperName}.app`,
+    "Contents",
+    "MacOS",
+    helperName,
+  );
+
+  return (await pathExists(helperPath)) ? helperPath : execPath;
+}
+
 async function openLog(path: string): Promise<FileHandle> {
   await mkdir(dirname(path), { recursive: true });
   return await open(path, "w");
 }
 
 const DAEMON_STATUS_TIMEOUT_MS = 35_000;
+// Windows first launches routinely blow past the 35s POSIX budget: Defender
+// real-time scanning of the freshly-written packaged binaries inflates the
+// daemon cold start (native better-sqlite3 load + first SQLite open/migrate +
+// status-pipe bind) well past 35s. PostHog on the packaged_runtime_failed
+// status-timeout bucket showed ~90% of affected devices DID open the app on a
+// later launch — the daemon was merely slow, not dead — so a wider win32 budget
+// lets that first launch succeed instead of failing to a recovery screen and
+// forcing a manual relaunch.
+const WIN32_STATUS_TIMEOUT_MS = 90_000;
 const DAEMON_MIGRATION_STATUS_TIMEOUT_MS = 30 * 60 * 1000;
 
+// Poll cadence for waitForStatus: start tight so a fast daemon is detected
+// promptly, then back off geometrically (capped) so a not-yet-bound pipe is not
+// hammered with connect attempts that add CPU/AV contention to an already-slow
+// cold start.
+const STATUS_POLL_INITIAL_MS = 150;
+const STATUS_POLL_MAX_MS = 1500;
+
+// Baseline status wait budget by platform, before the daemon-only legacy
+// migration override. win32 gets the wider AV-scan headroom; every other OS
+// keeps the 35s baseline.
+function baseStatusTimeoutMs(platform: NodeJS.Platform = process.platform): number {
+  return platform === "win32" ? WIN32_STATUS_TIMEOUT_MS : DAEMON_STATUS_TIMEOUT_MS;
+}
+
 /**
- * Daemon status wait budget. The default 35s is fine for normal cold
- * boots, but the OD_LEGACY_DATA_DIR one-shot recovery flow can synch-
- * copy a multi-GB legacy `.od/` payload before SQLite even opens, and
- * killing the child mid-migration can leave dataDir half-promoted.
- * When the env var is set, use a 30-minute budget so the parent will
- * not tear the daemon down before the migration can complete.
+ * Daemon status wait budget. The platform baseline (35s, or 90s on win32 for
+ * AV-scan headroom) is fine for normal cold boots, but the OD_LEGACY_DATA_DIR
+ * one-shot recovery flow can synch-copy a multi-GB legacy `.od/` payload before
+ * SQLite even opens, and killing the child mid-migration can leave dataDir
+ * half-promoted. When the env var is set, use a 30-minute budget so the parent
+ * will not tear the daemon down before the migration can complete.
  *
  * @see apps/daemon/src/legacy-data-migrator.ts
  * @see https://github.com/nexu-io/open-design/issues/710
  */
 export function resolveDaemonStatusTimeoutMs(
   env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): number {
   const raw = env.OD_LEGACY_DATA_DIR;
   if (raw != null && raw.length > 0) return DAEMON_MIGRATION_STATUS_TIMEOUT_MS;
-  return DAEMON_STATUS_TIMEOUT_MS;
+  return baseStatusTimeoutMs(platform);
 }
 
 /**
@@ -123,10 +210,11 @@ export async function waitForStatus<T>(
   ipcPath: string,
   isReady: (status: T) => boolean,
   timeoutMs = DAEMON_STATUS_TIMEOUT_MS,
-  watch: { child: { exitCode: number | null; signalCode: NodeJS.Signals | null; once: (event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void) => void; off: (event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void) => void }; logPath: string } | null = null,
+  watch: { child: { exitCode: number | null; pid?: number; signalCode: NodeJS.Signals | null; once: (event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void) => void; off: (event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void) => void }; logPath: string } | null = null,
 ): Promise<T> {
   const startedAt = Date.now();
   let lastError: unknown;
+  let pollDelayMs = STATUS_POLL_INITIAL_MS;
   let childExited: { code: number | null; signal: NodeJS.Signals | null } | null = null;
 
   // Cover the race between spawn-resolved and now: if the child has
@@ -154,11 +242,33 @@ export async function waitForStatus<T>(
           { type: SIDECAR_MESSAGES.STATUS },
           { timeoutMs: 800 },
         );
+        const statusPid = typeof (status as { pid?: unknown }).pid === "number"
+          ? (status as { pid: number }).pid
+          : null;
+        if (watch?.child.pid != null) {
+          if (statusPid == null) {
+            lastError = new Error(`sidecar status did not include pid for spawned pid ${watch.child.pid}`);
+            await sleep(STATUS_POLL_INITIAL_MS);
+            continue;
+          }
+          if (statusPid !== watch.child.pid) {
+            lastError = new Error(`sidecar status pid ${statusPid} did not match spawned pid ${watch.child.pid}`);
+            await sleep(STATUS_POLL_INITIAL_MS);
+            continue;
+          }
+        }
         if (isReady(status)) return status;
       } catch (error) {
         lastError = error;
       }
-      await sleep(150);
+      // Keep timeoutMs a hard-ish upper bound: never sleep past the deadline, so
+      // the widened win32 budget can't be overshot by a full backoff interval on
+      // a slow/dead sidecar. The in-flight requestJsonIpc timeout is the only
+      // residual overshoot; the while-condition re-checks the deadline next tick.
+      const remaining = timeoutMs - (Date.now() - startedAt);
+      if (remaining <= 0) break;
+      await sleep(Math.min(pollDelayMs, remaining));
+      pollDelayMs = Math.min(pollDelayMs * 2, STATUS_POLL_MAX_MS);
     }
 
     throw new Error(
@@ -168,6 +278,41 @@ export async function waitForStatus<T>(
     );
   } finally {
     watch?.child.off('exit', onChildExit);
+  }
+}
+
+async function retireExistingSidecarEndpoint(ipcPath: string, logPath: string): Promise<void> {
+  let status: { pid?: number | null } | null = null;
+  try {
+    status = await requestJsonIpc<{ pid?: number | null }>(
+      ipcPath,
+      { type: SIDECAR_MESSAGES.STATUS },
+      { timeoutMs: 350 },
+    );
+  } catch {
+    return;
+  }
+
+  const pid = typeof status.pid === "number" ? status.pid : null;
+  await appendSidecarLifecycleLog(
+    logPath,
+    `[open-design packaged] existing sidecar endpoint detected ipc=${ipcPath} pid=${pid ?? "unknown"}; requesting shutdown before relaunch`,
+  );
+  try {
+    await requestJsonIpc(ipcPath, { type: SIDECAR_MESSAGES.SHUTDOWN }, { timeoutMs: 800 });
+  } catch (error) {
+    await appendSidecarLifecycleLog(
+      logPath,
+      `[open-design packaged] existing sidecar shutdown request failed ipc=${ipcPath} error=${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if (pid != null && pid !== process.pid && isProcessAlive(pid)) {
+    const exited = await waitForProcessExit(pid, 2500);
+    await appendSidecarLifecycleLog(
+      logPath,
+      `[open-design packaged] existing sidecar endpoint ${exited ? "exited" : "still-running"} ipc=${ipcPath} pid=${pid}`,
+    );
   }
 }
 
@@ -196,14 +341,18 @@ export function resolvePackagedPathEnv(basePath = process.env.PATH ?? ""): strin
 export function resolvePackagedChildBaseEnv(
   env: NodeJS.ProcessEnv = process.env,
   includeProviderSecrets = false,
+  systemProxyEnv: NodeJS.ProcessEnv = resolveSystemProxyEnv(),
+  includeSystemProxyEnv = true,
 ): NodeJS.ProcessEnv {
-  const baseEnv: NodeJS.ProcessEnv = {};
+  const forwardedEnv: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(env)) {
     if (value != null && value.length > 0 && shouldForwardPackagedChildEnv(key, includeProviderSecrets)) {
-      baseEnv[key] = value;
+      forwardedEnv[key] = value;
     }
   }
-  return baseEnv;
+  return includeSystemProxyEnv
+    ? mergeProxyAwareEnv(process.platform, systemProxyEnv, forwardedEnv)
+    : mergeProxyAwareEnv(process.platform, forwardedEnv);
 }
 
 function createPackagedDaemonManagedPathEnv(
@@ -212,11 +361,13 @@ function createPackagedDaemonManagedPathEnv(
   return {
     OD_DATA_DIR: paths.dataRoot,
     OD_RESOURCE_ROOT: paths.resourceRoot,
+    OD_INSTALLATION_DIR: paths.installationRoot,
   };
 }
 
 export type PackagedDaemonSpawnEnvOptions = {
   appVersion: string | null;
+  amrProfile?: string | null;
   daemonCliEntry: string | null;
   /**
    * PR #974 round-5 (lefarcen P2): only pin the daemon's import-folder
@@ -260,6 +411,9 @@ export function buildPackagedDaemonSpawnEnv(
     // fallback, but packaged runtime must not rely on path inference from
     // Electron userData, bundle names, or ports.
     ...createPackagedDaemonManagedPathEnv(paths),
+    ...(options.amrProfile == null || options.amrProfile.length === 0
+      ? {}
+      : { OPEN_DESIGN_AMR_PROFILE: options.amrProfile }),
     ...(options.appVersion == null ? {} : { OD_APP_VERSION: options.appVersion }),
     ...(options.telemetryRelayUrl == null || options.telemetryRelayUrl.length === 0
       ? {}
@@ -289,6 +443,7 @@ export function buildPackagedDaemonSpawnEnv(
 
 async function spawnSidecarChild(options: {
   app: AppKey;
+  electronNodeCommand: string | null;
   entryPath: string;
   env: NodeJS.ProcessEnv;
   nodeCommand: string | null;
@@ -307,20 +462,30 @@ async function spawnSidecarChild(options: {
     namespace: options.runtime.namespace,
     source: options.runtime.source,
   } satisfies SidecarStamp;
-  const logHandle = await openLog(logPathFor(options.paths, options.app));
+  const logPath = logPathFor(options.paths, options.app);
+  const logHandle = await openLog(logPath);
+  await retireExistingSidecarEndpoint(ipcPath, logPath);
+  const usesElectronAsNode = options.nodeCommand == null;
+  const command = options.nodeCommand
+    ?? options.electronNodeCommand
+    ?? await resolvePackagedElectronNodeCommand();
   const childEnv = createSidecarLaunchEnv({
     base: options.paths.runtimeRoot,
     contract: OPEN_DESIGN_SIDECAR_CONTRACT,
     extraEnv: {
-      ...resolvePackagedChildBaseEnv(process.env, options.app === APP_KEYS.DAEMON),
+      ...resolvePackagedChildBaseEnv(
+        process.env,
+        options.app === APP_KEYS.DAEMON,
+        resolveSystemProxyEnv(),
+        options.app !== APP_KEYS.DAEMON,
+      ),
       ...options.env,
       NODE_ENV: "production",
       PATH: resolvePackagedPathEnv(),
-      ...(options.nodeCommand == null ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+      ...(usesElectronAsNode ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
     },
     stamp,
   });
-  const command = options.nodeCommand ?? process.execPath;
   const child = spawn(
     command,
     [options.entryPath, ...createProcessStampArgs(stamp, OPEN_DESIGN_SIDECAR_CONTRACT)],
@@ -337,10 +502,12 @@ async function spawnSidecarChild(options: {
     child.once("spawn", resolveSpawn);
   });
 
-  return { app: options.app, child, ipcPath, logHandle };
+  return { app: options.app, child, ipcPath, logHandle, logPath };
 }
 
 async function closeManagedChild(child: ManagedSidecarChild): Promise<void> {
+  const appendLifecycleLog = async (message: string): Promise<void> => appendSidecarLifecycleLog(child.logPath, message);
+  await appendLifecycleLog(`[open-design packaged] shutdown requested app=${child.app} pid=${child.child.pid ?? "unknown"}`);
   try {
     await requestJsonIpc(child.ipcPath, { type: SIDECAR_MESSAGES.SHUTDOWN }, { timeoutMs: 1200 });
   } catch {
@@ -348,9 +515,11 @@ async function closeManagedChild(child: ManagedSidecarChild): Promise<void> {
   }
 
   if (!(await waitForProcessExit(child.child.pid, 5000))) {
+    await appendLifecycleLog(`[open-design packaged] shutdown timeout app=${child.app} pid=${child.child.pid ?? "unknown"}; forcing stop`);
     await stopProcesses([child.child.pid]);
   }
 
+  await appendLifecycleLog(`[open-design packaged] exited app=${child.app} pid=${child.child.pid ?? "unknown"} code=${child.child.exitCode ?? "unknown"} signal=${child.child.signalCode ?? "none"}`);
   await child.logHandle.close().catch(() => undefined);
 }
 
@@ -359,8 +528,10 @@ export async function startPackagedSidecars(
   paths: PackagedNamespacePaths,
   options: {
     appVersion: string | null;
+    amrProfile: string | null;
     daemonCliEntry: string | null;
     daemonSidecarEntry: string | null;
+    electronNodeCommand: string | null;
     nodeCommand: string | null;
     telemetryRelayUrl: string | null;
     posthogKey: string | null;
@@ -378,6 +549,15 @@ export async function startPackagedSidecars(
     webSidecarEntry: string | null;
     webStandaloneRoot: string | null;
     webOutputMode: PackagedWebOutputMode;
+    /**
+     * Boot-progress hook, fired at each sidecar bring-up boundary: the
+     * `"-spawning"` edge just before a child is spawned, and the `"-ready"`
+     * edge once it reports a usable URL. The Electron entry forwards these to
+     * the splash status line so a slow cold boot shows which phase is underway
+     * (and visibly advances the step counter the moment each long native wait
+     * clears) instead of a frozen frame; headless callers omit it.
+     */
+    onPhase?: (phase: "daemon-spawning" | "daemon-ready" | "web-spawning" | "web-ready") => void;
   },
 ): Promise<PackagedSidecarHandle> {
   await mkdir(paths.namespaceRoot, { recursive: true });
@@ -393,11 +573,13 @@ export async function startPackagedSidecars(
   const children: ManagedSidecarChild[] = [];
 
   try {
+    options.onPhase?.("daemon-spawning");
     const daemon = await spawnSidecarChild({
       app: APP_KEYS.DAEMON,
       entryPath: options.daemonSidecarEntry ?? resolveSidecarEntry("@open-design/daemon", "sidecar"),
       env: buildPackagedDaemonSpawnEnv(paths, {
         appVersion: options.appVersion,
+        amrProfile: options.amrProfile,
         daemonCliEntry: options.daemonCliEntry,
         legacyDataDir: process.env.OD_LEGACY_DATA_DIR ?? null,
         requireDesktopAuth: options.requireDesktopAuth,
@@ -405,6 +587,7 @@ export async function startPackagedSidecars(
         posthogKey: options.posthogKey,
         posthogHost: options.posthogHost,
       }),
+      electronNodeCommand: options.electronNodeCommand,
       nodeCommand: options.nodeCommand,
       paths,
       runtime,
@@ -422,7 +605,9 @@ export async function startPackagedSidecars(
       { child: daemon.child, logPath: logPathFor(paths, APP_KEYS.DAEMON) },
     );
     if (daemonStatus.url == null) throw new Error("daemon did not report a URL");
+    options.onPhase?.("daemon-ready");
 
+    options.onPhase?.("web-spawning");
     const web = await spawnSidecarChild({
       app: APP_KEYS.WEB,
       entryPath: options.webSidecarEntry ?? resolveSidecarEntry("@open-design/web", "sidecar"),
@@ -433,6 +618,7 @@ export async function startPackagedSidecars(
         OD_WEB_OUTPUT_MODE: options.webOutputMode,
         PORT: "0",
       },
+      electronNodeCommand: options.electronNodeCommand,
       nodeCommand: options.nodeCommand,
       paths,
       runtime,
@@ -441,8 +627,14 @@ export async function startPackagedSidecars(
     const webStatus = await waitForStatus<WebStatusSnapshot>(
       web.ipcPath,
       (status) => status.url != null,
+      // Web has no legacy-migration path, so it uses the plain platform
+      // baseline (still widened on win32, where AV scanning can also slow the
+      // web sidecar's first bind) rather than resolveDaemonStatusTimeoutMs.
+      baseStatusTimeoutMs(),
+      { child: web.child, logPath: logPathFor(paths, APP_KEYS.WEB) },
     );
     if (webStatus.url == null) throw new Error("web did not report a URL");
+    options.onPhase?.("web-ready");
 
     return {
       daemon: daemonStatus,

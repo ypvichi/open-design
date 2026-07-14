@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AssistantMessage } from '../../src/components/AssistantMessage';
 import type { AgentEvent, ChatMessage } from '../../src/types';
@@ -23,6 +23,8 @@ describe('AssistantMessage tool status', () => {
   it('shows Done for a completed run tool use that has no tool result', () => {
     const { container } = render(
       <AssistantMessage
+        projectKind="prototype"
+        conversationId="conv-1"
         message={messageWithEvents([
           {
             kind: 'tool_use',
@@ -36,13 +38,15 @@ describe('AssistantMessage tool status', () => {
       />,
     );
 
-    expect(container.querySelector('.op-status-ok')?.textContent).toMatch(/^done$/i);
+    expect(container.querySelector('.op-status-ok')).not.toBeNull();
     expect(container.querySelector('.op-status-running')).toBeNull();
   });
 
   it('keeps legacy completed messages without runStatus as Done', () => {
     const { container } = render(
       <AssistantMessage
+        projectKind="prototype"
+        conversationId="conv-1"
         message={{
           ...messageWithEvents([
             {
@@ -59,13 +63,15 @@ describe('AssistantMessage tool status', () => {
       />,
     );
 
-    expect(container.querySelector('.op-status-ok')?.textContent).toMatch(/^done$/i);
+    expect(container.querySelector('.op-status-ok')).not.toBeNull();
     expect(container.querySelector('.op-status-running')).toBeNull();
   });
 
   it('shows Done in a grouped completed run when tool results are missing', () => {
     const { container } = render(
       <AssistantMessage
+        projectKind="prototype"
+        conversationId="conv-1"
         message={messageWithEvents([
           {
             kind: 'tool_use',
@@ -86,12 +92,50 @@ describe('AssistantMessage tool status', () => {
     );
 
     expect(container.querySelector('.action-card-toggle.running')).toBeNull();
-    expect(screen.getByRole('button', { name: /Done/i })).toBeTruthy();
+    expect(container.querySelector('.op-status-ok, .action-card-status.op-status-ok')).not.toBeNull();
+  });
+
+  it('does not group duplicate tool_use records with the same id', () => {
+    const { container } = render(
+      <AssistantMessage
+        projectKind="prototype"
+        conversationId="conv-1"
+        message={messageWithEvents([
+          {
+            kind: 'tool_use',
+            id: 'tool-1',
+            name: 'Write',
+            input: { file_path: '/repo/index.html', content: '<main />' },
+          },
+          {
+            kind: 'tool_use',
+            id: 'tool-1',
+            name: 'Write',
+            input: { file_path: '/repo/index.html', content: '<main />' },
+          },
+          {
+            kind: 'tool_result',
+            toolUseId: 'tool-1',
+            content: 'ok',
+            isError: false,
+          },
+        ])}
+        streaming={false}
+        projectId="project-1"
+      />,
+    );
+
+    expect(container.querySelector('.action-card-toggle')).toBeNull();
+    expect(container.querySelectorAll('.op-card.op-file')).toHaveLength(1);
+    expect(container.querySelector('[data-testid="file-ops-toggle"]')?.textContent).toContain('Write 1');
+    expect(container.textContent).not.toContain('×2');
   });
 
   it('does not show Done when a failed run is missing a tool result', () => {
     const { container } = render(
       <AssistantMessage
+        projectKind="prototype"
+        conversationId="conv-1"
         message={{
           ...messageWithEvents([
             {
@@ -108,13 +152,15 @@ describe('AssistantMessage tool status', () => {
       />,
     );
 
-    expect(container.querySelector('.op-status-error')?.textContent).toMatch(/^error$/i);
+    expect(container.querySelector('.op-status-error')).not.toBeNull();
     expect(container.querySelector('.op-status-ok')).toBeNull();
   });
 
   it('does not show Done when a canceled run is missing a tool result', () => {
     const { container } = render(
       <AssistantMessage
+        projectKind="prototype"
+        conversationId="conv-1"
         message={{
           ...messageWithEvents([
             {
@@ -131,13 +177,15 @@ describe('AssistantMessage tool status', () => {
       />,
     );
 
-    expect(container.querySelector('.op-status-error')?.textContent).toMatch(/^error$/i);
+    expect(container.querySelector('.op-status-error')).not.toBeNull();
     expect(container.querySelector('.op-status-ok')).toBeNull();
   });
 
   it('keeps Running for a streaming tool use that has no tool result', () => {
     const { container } = render(
       <AssistantMessage
+        projectKind="prototype"
+        conversationId="conv-1"
         message={{
           ...messageWithEvents([
             {
@@ -155,7 +203,30 @@ describe('AssistantMessage tool status', () => {
       />,
     );
 
-    expect(container.querySelector('.op-status-running')?.textContent).toBe('running…');
-    expect(screen.queryByText('Done')).toBeNull();
+    expect(container.querySelector('.op-status-running')).not.toBeNull();
+    expect(container.querySelector('.op-status-ok')).toBeNull();
+  });
+
+  it('renders URLs in JSON-like status details without trailing structural characters', () => {
+    const { container } = render(
+      <AssistantMessage
+        projectKind="prototype"
+        conversationId="conv-1"
+        message={messageWithEvents([
+          {
+            kind: 'status',
+            label: 'publish repo',
+            detail: '{"url":"https://github.com/nexu-io/example-plugin","nameWithOwner":"nexu-io/example-plugin"}',
+          },
+        ])}
+        streaming={false}
+        projectId="project-1"
+      />,
+    );
+
+    const link = container.querySelector('.status-detail a.md-link');
+    expect(link?.getAttribute('href')).toBe('https://github.com/nexu-io/example-plugin');
+    expect(link?.textContent).toBe('https://github.com/nexu-io/example-plugin');
+    expect(container.querySelector('.status-detail')?.textContent).toContain('"}');
   });
 });

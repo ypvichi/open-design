@@ -1,11 +1,16 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import ts from "typescript";
 
+import { checkCrossAppImports } from "./check-cross-app-imports.ts";
 import { checkDesignSystemManifests } from "./check-design-system-manifests.ts";
 import { checkDesignSystemPackageQuality } from "./check-design-system-package-quality.ts";
 import { checkDesignSystemComponentFixtureReport } from "./check-components-fixtures.ts";
 import { checkDesignSystemFlagParity } from "./check-design-system-flag-parity.ts";
 import { checkComponentsManifestExtraction } from "./check-components-manifest-extraction.ts";
+import { checkPluginPreviewManifest } from "./check-plugin-preview-manifest.ts";
+import { validatePlaywrightSuiteTopology } from "../e2e/lib/playwright/suites.ts";
 import {
   checkDesignSystemA1RequiredTokens,
   checkDesignSystemA2DefaultsParity,
@@ -14,6 +19,7 @@ import {
   checkDesignSystemTokenFixtureSync,
   checkDesignSystemUnknownTokens,
 } from "./check-tokens-fixture-sync.ts";
+import { checkCraftReferences } from "./lint-craft-references.ts";
 import { collectCssHardcodedColorMatches, cssWideAndSpecialColorKeywords, realNamedColors } from "./style-policy.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -59,7 +65,10 @@ const residualAllowedExactPaths = new Set([
   "packages/agui-adapter/esbuild.config.mjs",
   "packages/contracts/esbuild.config.mjs",
   "packages/diagnostics/esbuild.config.mjs",
+  "packages/download/esbuild.config.mjs",
   "packages/host/esbuild.config.mjs",
+  "packages/launcher-proto/esbuild.config.mjs",
+  "packages/metatool/esbuild.config.mjs",
   "packages/platform/esbuild.config.mjs",
   "packages/plugin-runtime/esbuild.config.mjs",
   "packages/registry-protocol/esbuild.config.mjs",
@@ -69,21 +78,53 @@ const residualAllowedExactPaths = new Set([
   // executed directly by Node and are not loaded by the app runtime.
   "scripts/import-prompt-templates.mjs",
   "scripts/postinstall.mjs",
+  // Checked-in bin shim so pnpm can link `od` before daemon dist output exists.
+  "apps/daemon/bin/od.mjs",
   "apps/packaged/esbuild.config.mjs",
   // Browser service workers must be served as JavaScript files.
   "apps/web/public/od-notifications-sw.js",
+  // Vendored dom-to-pptx browser bundle used by the packaged desktop renderer
+  // for editable PPTX export. It is loaded into the off-screen Chromium page as
+  // an upstream browser asset, not compiled as project-owned TypeScript.
+  "apps/desktop/vendor/dom-to-pptx/dom-to-pptx.bundle.js",
+  // Shared nav enhancer for the landing-page static `/community/` pages,
+  // which are verbatim HTML served straight from `public/` (not Astro-
+  // compiled). It must ship as a browser-loadable `.js` asset, same as the
+  // web notifications service worker above.
+  "apps/landing-page/public/community/_site-nav.js",
   // PostCSS loads Tailwind through a web-local .mjs compatibility config entry.
   "apps/web/postcss.config.mjs",
   "scripts/bake-html-ppt-examples.mjs",
+  // CI-only plugin-preview renderer. Kept .mjs and run directly by Node so its
+  // runtime deps (puppeteer-core + a headless Chrome + ffmpeg) are provided by
+  // the CI environment and never pulled into the daemon/web TS build or bundle.
+  "scripts/bake-plugin-previews.mjs",
+  // Manifest diff guard + its node:test coverage. Run directly by Node from the
+  // bake workflows (no TS build step there) to decide whether a `previews` entry
+  // actually changed, ignoring the per-run `generatedAt` timestamp.
+  "scripts/plugin-previews-diff.mjs",
+  "scripts/plugin-previews-diff.test.mjs",
+  // CI-only R2 garbage collector for orphaned preview clips + its node:test.
+  "scripts/plugin-previews-gc.mjs",
+  "scripts/plugin-previews-gc.test.mjs",
   "scripts/scaffold-html-ppt-skills.mjs",
   "scripts/sync-hyperframes-skill.mjs",
   "scripts/verify-media-models.mjs",
+  // AMR (vela) verifier: ad-hoc dev runner that imports the daemon's compiled
+  // `dist/acp.js` and drives a real `vela agent run` against a live model.
+  // Kept as .mjs so it can be invoked directly via Node without any transform.
+  "apps/daemon/scripts/verify-amr-real-vela.mjs",
+  // Fake `vela agent run --runtime opencode` ACP stdio stub used by the AMR
+  // integration tests. The Vitest test spawns it via `child_process.spawn`,
+  // which needs a directly-executable file (shebang + .mjs).
+  "apps/daemon/tests/fixtures/fake-vela.mjs",
   "tools/dev/bin/tools-dev.mjs",
   "tools/dev/esbuild.config.mjs",
   "tools/pack/bin/tools-pack.mjs",
   "tools/pack/esbuild.config.mjs",
-  "tools/pr/bin/tools-pr.mjs",
-  "tools/pr/esbuild.config.mjs",
+  // Checked-in bin shim so pnpm can link `tools-release` before dist output exists.
+  "tools/release/bin/tools-release.mjs",
+  "tools/release/esbuild.config.mjs",
   "tools/serve/bin/tools-serve.mjs",
   "tools/serve/esbuild.config.mjs",
   "tools/pack/resources/mac/notarize.cjs",
@@ -106,10 +147,39 @@ const residualAllowedPathPrefixes = [
   "e2e/ui/test-results/",
   // Vendored upstream HyperFrames helper scripts (design template).
   "design-templates/hyperframes/scripts/",
+  // Vendored upstream Web Clone skill helper scripts. These are portable
+  // Node-run skill utilities executed from user workspaces via explicit script
+  // paths, and stay as `.mjs` to preserve the upstream skill packaging.
+  "skills/web-clone/scripts/",
   // Vendored upstream Last30Days runtime helper used by the engine (design template).
   "design-templates/last30days/scripts/lib/vendor/",
   // Vendored upstream html-ppt runtime assets (lewislulu/html-ppt-skill, design template).
   "design-templates/html-ppt/assets/",
+  // Vendored upstream website-clone recon/mirror/audit helpers
+  // (Jane-xiaoer/claude-skill-web-clone). Global skill assets staged into the
+  // project cwd for direct `node scripts/...` execution by the agent.
+  "skills/web-clone/scripts/",
+  // Replay-based mock CLIs that impersonate the agent CLIs OD spawns
+  // (opencode/claude/codex/gemini/cursor-agent + ACP family). Need to
+  // be directly executable via Node so `child_process.spawn` from test
+  // harnesses and PATH-overlay shells work without any transform step.
+  // `mocks/scripts/` holds the maintainer-facing helpers (manifest math,
+  // fetch from R2) which are also pure-node single-file modules — same
+  // precedent as `apps/daemon/tests/fixtures/fake-vela.mjs` (an ACP
+  // stdio stub, allowlisted individually above). See `mocks/README.md`.
+  "mocks/lib/",
+  "mocks/mock-agent.mjs",
+  "mocks/scripts/",
+  // OD Clipper - a standalone Chrome MV3 extension subproject (not a pnpm
+  // workspace package, no build step). It ships hand-written browser-loadable
+  // JavaScript (service worker, content script, popup) the same way as the
+  // web notifications service worker; it must not be retypecast to TypeScript.
+  "clipper/",
+  // OD Figma Import - a standalone Figma plugin subproject (no build step,
+  // not a pnpm workspace package). Figma plugins load hand-written
+  // browser-loadable JavaScript (`code.js` sandbox + `ui.html`); same
+  // precedent as the clipper, and it must not be retypecast to TypeScript.
+  "figma-plugin/",
   "test-results/",
   "vendor/",
 ];
@@ -453,8 +523,17 @@ const e2ePackageJsonPath = path.join(repoRoot, "e2e", "package.json");
 const e2eSkippedDirectories = new Set([".od-data", "node_modules", "reports", "test-results"]);
 const e2eAllowedScripts = [
   "test",
+  "test:p0",
+  "test:p0p1",
+  "test:p1",
+  "test:p2",
+  "test:ui",
   "test:ui:critical",
   "test:ui:extended",
+  "test:ui:p0",
+  "test:ui:p0p1",
+  "test:ui:p1",
+  "test:ui:p2",
   "typecheck",
 ];
 
@@ -473,6 +552,120 @@ async function collectRepositoryFiles(directory: string, skippedDirectoryNames =
   }
 
   return files;
+}
+
+const productNeutralitySkippedDirectories = new Set([
+  ".git",
+  ".od",
+  ".tmp",
+  "dist",
+  "node_modules",
+  "out",
+  "test-results",
+]);
+// Public contracts, help/prompt strings, docs, and shipped content should
+// describe the integration role, not name a private deployment. The default
+// check blocks named "orchestrator such as ..." examples; private forks can
+// add stricter local terms through OD_PRODUCT_NEUTRALITY_FORBIDDEN_TERMS.
+const productNeutralityCheckedPathPrefixes = [
+  "apps/daemon/src/",
+  "apps/web/app/",
+  "apps/web/src/",
+  "craft/",
+  "design-systems/",
+  "design-templates/",
+  "docs/",
+  "packages/contracts/src/",
+  "skills/",
+];
+const productNeutralityTextExtensions = new Set([".md", ".mdx", ".ts", ".tsx"]);
+const productNeutralityDocFilePattern =
+  /(?:^|\/)(?:AGENTS|CLAUDE|CONTRIBUTING(?:\.[^.]+)?|QUICKSTART|README(?:\.[^.]+)?)\.md$/;
+const namedOrchestratorExamplePattern =
+  /\borchestrator\s+(?:such as|like|for example,?)\s+[`"']?[A-Z][A-Za-z0-9_-]+/gi;
+
+type ProductNeutralityViolation = {
+  filePath: string;
+  lineNumber: number;
+  reason: string;
+};
+
+export function isProductNeutralityCheckedPath(repositoryPath: string): boolean {
+  return (
+    productNeutralityCheckedPathPrefixes.some((prefix) => repositoryPath.startsWith(prefix)) ||
+    productNeutralityDocFilePattern.test(repositoryPath)
+  );
+}
+
+function isProductNeutralityTextFile(repositoryPath: string): boolean {
+  return productNeutralityTextExtensions.has(path.extname(repositoryPath));
+}
+
+function productNeutralityForbiddenTerms(): string[] {
+  return String(process.env.OD_PRODUCT_NEUTRALITY_FORBIDDEN_TERMS ?? "")
+    .split(",")
+    .map((term) => term.trim())
+    .filter((term) => term.length > 0);
+}
+
+export function collectProductNeutralityViolationsFromSource(
+  repositoryPath: string,
+  source: string,
+  forbiddenTerms = productNeutralityForbiddenTerms(),
+): ProductNeutralityViolation[] {
+  if (!isProductNeutralityCheckedPath(repositoryPath) || !isProductNeutralityTextFile(repositoryPath)) {
+    return [];
+  }
+
+  const lowerSource = source.toLowerCase();
+  const violations: ProductNeutralityViolation[] = [];
+
+  for (const match of source.matchAll(namedOrchestratorExamplePattern)) {
+    violations.push({
+      filePath: repositoryPath,
+      lineNumber: lineNumberForIndex(source, match.index ?? 0),
+      reason: "use generic \"external orchestrator\" phrasing instead of named orchestrator examples",
+    });
+  }
+
+  for (const term of forbiddenTerms) {
+    const lowerTerm = term.toLowerCase();
+    let index = lowerSource.indexOf(lowerTerm);
+
+    while (index !== -1) {
+      violations.push({
+        filePath: repositoryPath,
+        lineNumber: lineNumberForIndex(source, index),
+        reason: "use generic \"external orchestrator\" phrasing instead of private deployment names",
+      });
+      index = lowerSource.indexOf(lowerTerm, index + lowerTerm.length);
+    }
+  }
+
+  return violations;
+}
+
+async function checkProductNeutrality(): Promise<boolean> {
+  const violations: ProductNeutralityViolation[] = [];
+
+  for (const repositoryPath of await collectRepositoryFiles(repoRoot, productNeutralitySkippedDirectories)) {
+    if (!isProductNeutralityCheckedPath(repositoryPath) || !isProductNeutralityTextFile(repositoryPath)) {
+      continue;
+    }
+    const source = await readFile(path.join(repoRoot, repositoryPath), "utf8");
+    violations.push(...collectProductNeutralityViolationsFromSource(repositoryPath, source));
+  }
+
+  if (violations.length > 0) {
+    console.error("Product-neutrality violations found:");
+    for (const violation of violations) {
+      console.error(`${violation.filePath}:${violation.lineNumber} -> ${violation.reason}`);
+    }
+    return false;
+  }
+
+  console.log("Product-neutrality check passed: public docs, contracts, and prompts use generic orchestrator naming.");
+  return true;
 }
 
 async function checkE2eLayout(): Promise<boolean> {
@@ -584,13 +777,187 @@ async function checkWebTestLayout(): Promise<boolean> {
   return true;
 }
 
+const webImportIsolationSourcePrefixes = ["apps/web/app/", "apps/web/src/"];
+const webImportIsolationExtensions = new Set([".ts", ".tsx"]);
+const webImportIsolationSkippedDirectories = new Set([
+  ".next",
+  "dist",
+  "node_modules",
+  "out",
+  "reports",
+  "test-results",
+]);
+const webImportIsolationForbiddenPackages = [
+  "@open-design/platform",
+  "@open-design/sidecar",
+  "@open-design/sidecar-proto",
+];
+const webImportIsolationForbiddenDaemonRoots = [
+  "apps/daemon/src",
+  "apps/daemon/tests",
+];
+const webImportIsolationForbiddenPackageRoots = [
+  "packages/platform",
+  "packages/sidecar",
+  "packages/sidecar-proto",
+];
+
+type WebImportIsolationViolation = {
+  filePath: string;
+  lineNumber: number;
+  specifier: string;
+  reason: string;
+};
+
+type SourceImportSpecifier = {
+  lineNumber: number;
+  specifier: string;
+};
+
+export function isWebImportIsolationSourcePath(repositoryPath: string): boolean {
+  return (
+    webImportIsolationSourcePrefixes.some((prefix) => repositoryPath.startsWith(prefix)) &&
+    webImportIsolationExtensions.has(path.extname(repositoryPath))
+  );
+}
+
+function pushStringSpecifier(
+  imports: SourceImportSpecifier[],
+  sourceFile: ts.SourceFile,
+  node: ts.Node | undefined,
+): void {
+  if (!node) return;
+  if (!ts.isStringLiteral(node) && !ts.isNoSubstitutionTemplateLiteral(node)) return;
+
+  imports.push({
+    lineNumber: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+    specifier: node.text,
+  });
+}
+
+function collectImportSpecifiersFromSource(repositoryPath: string, source: string): SourceImportSpecifier[] {
+  const sourceFile = ts.createSourceFile(
+    repositoryPath,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    repositoryPath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const imports: SourceImportSpecifier[] = [];
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      pushStringSpecifier(imports, sourceFile, node.moduleSpecifier);
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      pushStringSpecifier(imports, sourceFile, node.argument.literal);
+    } else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+    ) {
+      pushStringSpecifier(imports, sourceFile, node.arguments[0]);
+    }
+
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+  return imports;
+}
+
+function isPackageOrSubpath(specifier: string, packageName: string): boolean {
+  return specifier === packageName || specifier.startsWith(`${packageName}/`);
+}
+
+function isPathOrDescendant(repositoryPath: string, root: string): boolean {
+  return repositoryPath === root || repositoryPath.startsWith(`${root}/`);
+}
+
+function resolveWebImportRepositoryPath(fromRepositoryPath: string, specifier: string): string | null {
+  const pathOnly = specifier.split(/[?#]/, 1)[0];
+  if (!pathOnly) return null;
+
+  if (pathOnly.startsWith("@/")) {
+    return path.posix.normalize(path.posix.join("apps/web", pathOnly.slice("@/".length)));
+  }
+
+  if (!pathOnly.startsWith(".")) return null;
+  return path.posix.normalize(path.posix.join(path.posix.dirname(fromRepositoryPath), pathOnly));
+}
+
+function webImportIsolationViolationReason(fromRepositoryPath: string, specifier: string): string | null {
+  if (webImportIsolationForbiddenPackages.some((packageName) => isPackageOrSubpath(specifier, packageName))) {
+    return "apps/web must not import sidecar or platform control-plane packages directly";
+  }
+
+  const resolvedPath = resolveWebImportRepositoryPath(fromRepositoryPath, specifier);
+  if (!resolvedPath) return null;
+
+  if (webImportIsolationForbiddenDaemonRoots.some((root) => isPathOrDescendant(resolvedPath, root))) {
+    return "apps/web must use daemon HTTP APIs or @open-design/contracts instead of daemon private source";
+  }
+
+  if (webImportIsolationForbiddenPackageRoots.some((root) => isPathOrDescendant(resolvedPath, root))) {
+    return "apps/web must not import sidecar or platform control-plane source directly";
+  }
+
+  return null;
+}
+
+export function collectWebImportIsolationViolationsFromSource(
+  repositoryPath: string,
+  source: string,
+): WebImportIsolationViolation[] {
+  if (!isWebImportIsolationSourcePath(repositoryPath)) return [];
+
+  return collectImportSpecifiersFromSource(repositoryPath, source).flatMap((sourceImport) => {
+    const reason = webImportIsolationViolationReason(repositoryPath, sourceImport.specifier);
+    if (!reason) return [];
+    return [{
+      filePath: repositoryPath,
+      lineNumber: sourceImport.lineNumber,
+      specifier: sourceImport.specifier,
+      reason,
+    }];
+  });
+}
+
+async function checkWebImportIsolation(): Promise<boolean> {
+  const violations: WebImportIsolationViolation[] = [];
+
+  for (const repositoryPrefix of webImportIsolationSourcePrefixes) {
+    const repositoryDirectory = repositoryPrefix.replace(/\/$/, "");
+    if (!(await repositoryDirectoryExists(repositoryDirectory))) continue;
+
+    for (const repositoryPath of await collectRepositoryFiles(
+      path.join(repoRoot, repositoryDirectory),
+      webImportIsolationSkippedDirectories,
+    )) {
+      if (!isWebImportIsolationSourcePath(repositoryPath)) continue;
+      const source = await readFile(path.join(repoRoot, repositoryPath), "utf8");
+      violations.push(...collectWebImportIsolationViolationsFromSource(repositoryPath, source));
+    }
+  }
+
+  if (violations.length > 0) {
+    console.error("Web import isolation violations found:");
+    for (const violation of violations) {
+      console.error(`- ${violation.filePath}:${violation.lineNumber} \`${violation.specifier}\` -> ${violation.reason}`);
+    }
+    return false;
+  }
+
+  console.log("Web import isolation check passed: web runtime imports stay behind contracts and daemon HTTP APIs.");
+  return true;
+}
+
 const toolsRootAllowlist = new Map<string, "directory" | "file">([
   // Keep top-level tools intentionally small. `tools/launcher` was an incoming
   // Windows shim experiment from PR #683 and is not an active repo boundary.
   ["AGENTS.md", "file"],
   ["dev", "directory"],
   ["pack", "directory"],
-  ["pr", "directory"],
+  ["release", "directory"],
   ["serve", "directory"],
 ]);
 
@@ -605,7 +972,7 @@ async function checkToolsLayout(): Promise<boolean> {
     const repositoryPath = `tools/${entry.name}${entry.isDirectory() ? "/" : ""}`;
 
     if (expected == null) {
-      violations.push(`${repositoryPath} -> tools/ top-level entries are allowlisted; expected only AGENTS.md, dev/, pack/, pr/, and serve/`);
+      violations.push(`${repositoryPath} -> tools/ top-level entries are allowlisted; expected only AGENTS.md, dev/, pack/, release/, and serve/`);
       continue;
     }
 
@@ -899,14 +1266,52 @@ async function checkStylePolicy(): Promise<boolean> {
   return true;
 }
 
+async function checkCiTopology(): Promise<boolean> {
+  const ciWorkflow = await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+  const errors = [
+    ...validatePlaywrightSuiteTopology(),
+    ...[
+      "run: node --experimental-strip-types scripts/scopes.ts github-output",
+      "ci_mode: ${{ steps.detect.outputs.ci_mode }}",
+      "ui_p0_validation_required: ${{ steps.detect.outputs.ui_p0_validation_required }}",
+      "run_ui_p0: ${{ steps.detect.outputs.run_ui_p0 }}",
+      "run_nix_validation: ${{ steps.detect.outputs.run_nix_validation }}",
+      "ui_p0_matrix: ${{ steps.detect.outputs.ui_p0_matrix }}",
+      "visual_matrix: ${{ steps.detect.outputs.visual_matrix }}",
+      "include: ${{ fromJSON(needs.scopes.outputs.ui_p0_matrix) }}",
+      "include: ${{ fromJSON(needs.scopes.outputs.visual_matrix) }}",
+      "needs.scopes.outputs.run_ui_p0 == 'true'",
+      "pnpm -C e2e exec tsx scripts/playwright.ts run-ui-group smoke",
+      "pnpm -C e2e exec tsx scripts/playwright.ts run-ui-group ${{ matrix.shard }}",
+    ]
+      .filter((needle) => !ciWorkflow.includes(needle))
+      .map((needle) => `.github/workflows/ci.yml is missing ${needle}`),
+  ];
+
+  if (errors.length > 0) {
+    console.error("CI topology check failed:");
+    for (const error of errors) console.error(`- ${error}`);
+    return false;
+  }
+
+  console.log("CI topology check passed: scopes, Playwright suites, and workflow matrices stay aligned.");
+  return true;
+}
+
 const checks: GuardCheck[] = [
   { name: "residual JavaScript", run: checkResidualJavaScript },
   { name: "package dependency specs", run: checkPackageDependencySpecs },
+  { name: "product neutrality", run: checkProductNeutrality },
+  { name: "cross-app imports", run: checkCrossAppImports },
   { name: "test layout", run: checkTestLayout },
   { name: "e2e layout", run: checkE2eLayout },
   { name: "web test layout", run: checkWebTestLayout },
+  { name: "web import isolation", run: checkWebImportIsolation },
   { name: "tools layout", run: checkToolsLayout },
   { name: "style policy", run: checkStylePolicy },
+  { name: "CI topology", run: checkCiTopology },
+  { name: "craft references", run: checkCraftReferences },
+  { name: "plugin preview manifest", run: checkPluginPreviewManifest },
   { name: "design system manifests", run: checkDesignSystemManifests },
   { name: "design system package quality", run: checkDesignSystemPackageQuality },
   { name: "design system component fixture report", run: checkDesignSystemComponentFixtureReport },
@@ -920,17 +1325,22 @@ const checks: GuardCheck[] = [
   { name: "design system component manifest extraction", run: checkComponentsManifestExtraction },
 ];
 
-const results: boolean[] = [];
-for (const check of checks) {
-  try {
-    results.push(await check.run());
-  } catch (error) {
-    console.error(`Guard check failed unexpectedly: ${check.name}`);
-    console.error(error);
-    results.push(false);
+async function runChecks(): Promise<boolean> {
+  const results: boolean[] = [];
+  for (const check of checks) {
+    try {
+      results.push(await check.run());
+    } catch (error) {
+      console.error(`Guard check failed unexpectedly: ${check.name}`);
+      console.error(error);
+      results.push(false);
+    }
   }
+
+  return results.every(Boolean);
 }
 
-if (results.some((passed) => !passed)) {
+const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+if (isMain && !(await runChecks())) {
   process.exitCode = 1;
 }

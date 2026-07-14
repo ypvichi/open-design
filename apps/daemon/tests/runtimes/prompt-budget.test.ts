@@ -1,6 +1,6 @@
 import { test } from 'vitest';
 import {
-  assert, checkPromptArgvBudget, checkWindowsCmdShimCommandLineBudget, checkWindowsDirectExeCommandLineBudget, claude, deepseek, deepseekMaxPromptArgBytes, vibe,
+  assert, checkPromptArgvBudget, checkWindowsCmdShimCommandLineBudget, checkWindowsDirectExeCommandLineBudget, claude, deepseek, deepseekMaxPromptArgBytes, grokBuild, kimi, vibe,
 } from './helpers/test-helpers.js';
 import type { TestAgentDef } from './helpers/test-helpers.js';
 
@@ -67,7 +67,7 @@ test('deepseek declares a conservative argv-byte budget for the prompt', () => {
 // real spawn would surface a generic ENAMETOOLONG / E2BIG.
 test('checkPromptArgvBudget flags oversized DeepSeek prompts and lets short prompts through', () => {
   const oversized = 'x'.repeat(deepseekMaxPromptArgBytes + 1);
-  const flagged = checkPromptArgvBudget(deepseek, oversized);
+  const flagged = checkPromptArgvBudget(deepseek, oversized, 'win32');
   assert.ok(flagged, 'oversized prompts must trip the argv-byte guard');
   assert.equal(flagged.code, 'AGENT_PROMPT_TOO_LARGE');
   assert.equal(flagged.limit, deepseekMaxPromptArgBytes);
@@ -91,20 +91,89 @@ test('checkPromptArgvBudget flags oversized DeepSeek prompts and lets short prom
   const cjkOversized = '汉'.repeat(
     Math.ceil(deepseekMaxPromptArgBytes / 3) + 1,
   );
-  const cjkFlagged = checkPromptArgvBudget(deepseek, cjkOversized);
+  const cjkFlagged = checkPromptArgvBudget(deepseek, cjkOversized, 'win32');
   assert.ok(cjkFlagged, 'byte-counted UTF-8 prompts must also trip the guard');
   assert.equal(cjkFlagged.code, 'AGENT_PROMPT_TOO_LARGE');
 });
 
+// Issue #4473: `maxPromptArgBytes` (30 KB) is derived from Windows'
+// ~32 KB CreateProcess command-line limit. On POSIX the per-arg ceiling is
+// far higher (Linux MAX_ARG_STRLEN 128 KB; macOS ARG_MAX 256 KB total), and
+// the *real* Windows command-line cap is guarded precisely post-buildArgs by
+// checkWindowsCmdShim/DirectExeCommandLineBudget. Applying the conservative
+// Windows byte budget unconditionally on macOS/Linux false-positives on
+// normal design projects (system prompt + DESIGN.md + skills ≈ 50-70 KB),
+// surfacing as a confusing "prompt too long" even though the OS would accept
+// the argv. The budget must be platform-aware.
+test('checkPromptArgvBudget does not false-positive on POSIX where argv ceilings are far higher (#4473)', () => {
+  // 50 KB: over the Windows-derived 30 KB budget, far under POSIX ceilings.
+  const fiftyKb = 'x'.repeat(50_000);
+  assert.equal(
+    checkPromptArgvBudget(deepseek, fiftyKb, 'linux'),
+    null,
+    'Linux must not flag a 50 KB argv prompt (well under MAX_ARG_STRLEN)',
+  );
+  assert.equal(
+    checkPromptArgvBudget(deepseek, fiftyKb, 'darwin'),
+    null,
+    'macOS must not flag a 50 KB argv prompt (well under ARG_MAX)',
+  );
+
+  // Windows still enforces the conservative budget — its real command-line
+  // cap is ~32 KB, so a 50 KB argv prompt genuinely cannot spawn there.
+  const win = checkPromptArgvBudget(deepseek, fiftyKb, 'win32');
+  assert.ok(win, 'Windows must still flag a 50 KB argv prompt');
+  assert.equal(win.code, 'AGENT_PROMPT_TOO_LARGE');
+
+  // The default design-router prompt can exceed 100 KB on first turn. POSIX
+  // should allow that size while still leaving headroom below Linux's 128 KiB
+  // per-argument ceiling.
+  const designRouterFirstTurn = 'x'.repeat(116_534);
+  assert.equal(
+    checkPromptArgvBudget(deepseek, designRouterFirstTurn, 'linux'),
+    null,
+    'Linux must allow a 116 KB first-turn design-router prompt',
+  );
+  assert.equal(
+    checkPromptArgvBudget(deepseek, designRouterFirstTurn, 'darwin'),
+    null,
+    'macOS must allow a 116 KB first-turn design-router prompt',
+  );
+  assert.ok(
+    checkPromptArgvBudget(deepseek, designRouterFirstTurn, 'win32'),
+    'Windows must still flag a 116 KB argv prompt',
+  );
+
+  // POSIX still guards a genuinely enormous prompt near the per-arg ceiling,
+  // so a runaway prompt fails fast with the actionable message instead of a
+  // generic spawn E2BIG.
+  const huge = 'x'.repeat(200_000);
+  assert.ok(
+    checkPromptArgvBudget(deepseek, huge, 'linux'),
+    'POSIX must still flag a 200 KB argv prompt near MAX_ARG_STRLEN',
+  );
+});
+
 test('checkPromptArgvBudget gives DeepSeek-specific guidance for large contexts', () => {
   const oversized = 'x'.repeat(deepseekMaxPromptArgBytes + 1);
-  const flagged = checkPromptArgvBudget(deepseek, oversized);
+  const flagged = checkPromptArgvBudget(deepseek, oversized, 'win32');
 
   assert.ok(flagged, 'oversized DeepSeek prompts must return a diagnostic');
   assert.match(flagged.message, /DeepSeek TUI/);
   assert.match(flagged.message, /currently accepts prompts only as a command-line argument/);
   assert.match(flagged.message, /API\/provider model connection/);
   assert.match(flagged.message, /stdin-capable adapter/);
+});
+
+test('Kimi ACP mode does not declare an argv-byte prompt budget', () => {
+  assert.equal(kimi.maxPromptArgBytes, undefined);
+  assert.equal(checkPromptArgvBudget(kimi, 'x'.repeat(100_000), 'win32'), null);
+});
+
+test('checkPromptArgvBudget is a no-op for Grok Build because it uses prompt files', () => {
+  assert.equal(grokBuild.promptViaFile, true);
+  assert.equal(grokBuild.maxPromptArgBytes, undefined);
+  assert.equal(checkPromptArgvBudget(grokBuild, 'x'.repeat(100_000)), null);
 });
 
 // Adapters that ship the prompt over stdin (every other code agent
@@ -426,19 +495,16 @@ test('cmd-shim and direct-exe guards are mutually exclusive on a single resoluti
   assert.ok(checkWindowsDirectExeCommandLineBudget(deepseek, exePath, args));
 });
 
-test('deepseek entry does not advertise deepseek-tui as a fallback bin', () => {
-  // `deepseek` is the dispatcher that owns `exec` / `--auto`; `deepseek-tui`
-  // is the runtime companion the dispatcher invokes. Upstream installs both
-  // together (npm and cargo). A `deepseek-tui`-only host is not a supported
-  // install, and `deepseek-tui` itself doesn't accept `exec --auto <prompt>`
-  // — surfacing it via fallbackBins would advertise availability but make
-  // the first /api/chat run fail. Pin the absence so the fallback can't
-  // drift back without an accompanying buildArgs branch + test.
-  assert.equal(
-    Array.isArray((deepseek as TestAgentDef & { fallbackBins?: string[] }).fallbackBins)
-      && ((deepseek as TestAgentDef & { fallbackBins?: string[] }).fallbackBins?.length ?? 0) > 0,
-    false,
-    `deepseek must not declare fallbackBins until the deepseek-tui-only invocation is implemented and tested; got ${JSON.stringify((deepseek as TestAgentDef & { fallbackBins?: string[] }).fallbackBins)}`,
+test('deepseek entry declares codewhale as a fallback bin but not deepseek-tui (issue #2983)', () => {
+  const fallbackBins = (deepseek as TestAgentDef & { fallbackBins?: string[] }).fallbackBins;
+  assert.ok(Array.isArray(fallbackBins), 'deepseek.fallbackBins must be an array');
+  assert.ok(
+    fallbackBins.includes('codewhale'),
+    `deepseek.fallbackBins must include 'codewhale'; got ${JSON.stringify(fallbackBins)}`,
+  );
+  assert.ok(
+    !fallbackBins.includes('deepseek-tui'),
+    'deepseek-tui is the runtime companion and must not be advertised as a dispatcher fallback',
   );
 });
 

@@ -2,9 +2,19 @@
   "$schema": "https://open-design.ai/schemas/plugin.v1.json",
   "specVersion": "1.0.0",
   "name": "example-html-ppt-presenter-mode-reveal",
-  "title": "Html Ppt Presenter Mode Reveal",
+  "title": "Run a Live AI Product Demo like a Founding DevRel Lead",
+  "title_i18n": {
+    "en": "Run a Live AI Product Demo like a Founding DevRel Lead",
+    "zh-CN": "像创始 DevRel 一样做现场 AI 演示",
+    "zh-TW": "像创始 DevRel 一样做现场 AI 演示"
+  },
   "version": "0.1.0",
-  "description": "演讲者模式专用 deck — tokyo-night 默认主题，5 套主题 T 键切换，每页带 150-300 字逐字稿示例（<aside class=\"notes\">），按 S 打开 popup（CURRENT / NEXT / SCRIPT / TIMER 四张磁吸卡片）。用于技术分享、公开演讲、课程讲解，怕忘词或要提词器的场景。",
+  "description": "Open Design live demo: from a one-line prompt to runnable design in a single session — the flow, live. Built as a decision-grade AI literacy deck for developers, prospects, community.",
+  "description_i18n": {
+    "en": "Open Design live demo: from a one-line prompt to runnable design in a single session — the flow, live. Built as a decision-grade AI literacy deck for developers, prospects, community.",
+    "zh-CN": "像创始 DevRel 一样做现场 AI 演示——一份可商业交付的AI 素养 Deck，围绕真实主题、证据链与决策目标组织。",
+    "zh-TW": "像创始 DevRel 一样做现场 AI 演示——一份可商业交付的AI 素养 Deck，围绕真实主题、证据链与决策目标组织。"
+  },
   "license": "MIT",
   "author": {
     "name": "Open Design",
@@ -20,7 +30,19 @@
     "presenter-mode",
     "untitled",
     "speaker-notes",
-    "presenter-view"
+    "presenter-view",
+    "training-deck",
+    "workshop",
+    "course-module",
+    "education",
+    "html-ppt-presenter-mode-reveal",
+    "ai-literacy",
+    "enterprise-ai-copilot-rollout-brief",
+    "ai",
+    "copilot",
+    "workflow",
+    "decision-deck",
+    "commercial-slide-agent"
   ],
   "compat": {
     "agentSkills": [
@@ -33,7 +55,7 @@
     "kind": "scenario",
     "taskKind": "new-generation",
     "mode": "deck",
-    "scenario": "engineering",
+    "scenario": "ai",
     "surface": "web",
     "preview": {
       "type": "html",
@@ -41,13 +63,18 @@
     },
     "useCase": {
       "query": {
-        "en": "Use the html-ppt-presenter-mode template to create a talk deck with speaker notes. First confirm the talk topic, duration (2-3 minutes per slide), and target audience. Then write 150-300 words of conversational presenter notes per slide (prompting signals, not a manuscript), with the presenter popup available via the S key.",
-        "zh-CN": "用 html-ppt-presenter-mode 模板做一份带逐字稿的演讲 PPT。先确认：演讲主题、时长（每页 2-3 分钟）、目标听众。然后帮我每页写 150-300 字的口语化逐字稿（不是讲稿，是提示信号），按 S 能打开 presenter 弹窗。"
+        "en": "Create \"Run a Live AI Product Demo like a Founding DevRel Lead\" as a decision-grade AI literacy deck in this template's own visual system. Subject: Open Design live demo: from a one-line prompt to runnable design in a single session — the flow, live. Audience: developers, prospects, community. First ask only for missing essentials: audience, decision target, source-of-truth materials, deadline, and must-keep numbers. Then produce the slide plan, written slides, visual direction, speaker-ready structure, and a critic pass against this rubric: does the deck make AI implementation concrete enough to fund.",
+        "zh-CN": "像创始 DevRel 一样做现场 AI 演示。像创始 DevRel 一样做现场 AI 演示——一份可商业交付的AI 素养 Deck，围绕真实主题、证据链与决策目标组织。 主题：Open Design live demo: from a one-line prompt to runnable design in a single session — the flow, live. 先确认受众、决策目标、素材来源、截止时间和必须保留的数据，再输出叙事主线、页面规划、逐页文案、视觉方向和按评审标准自检的版本。"
       },
       "exampleOutputs": [
         {
           "path": "./example.html",
-          "title": "Html Ppt Presenter Mode Reveal"
+          "title": "Run a Live AI Product Demo like a Founding DevRel Lead",
+          "title_i18n": {
+            "en": "Run a Live AI Product Demo like a Founding DevRel Lead",
+            "zh-CN": "像创始 DevRel 一样做现场 AI 演示",
+            "zh-TW": "像创始 DevRel 一样做现场 AI 演示"
+          }
         }
       ]
     },
@@ -75,6 +102,7 @@
     "capabilities": [
       "prompt:inject",
       "fs:write"
-    ]
+    ],
+    "category": "ai-literacy"
   }
 }

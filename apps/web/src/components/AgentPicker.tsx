@@ -1,5 +1,7 @@
+import { Button, Select } from '@open-design/components';
 import { useT } from '../i18n';
 import type { AgentInfo, ExecMode } from '../types';
+import { isVisibleLocalCliAgent } from '../utils/visibleAgents';
 
 interface Props {
   mode: ExecMode;
@@ -21,13 +23,14 @@ export function AgentPicker({
   onRefresh,
 }: Props) {
   const t = useT();
-  const available = agents.filter((a) => a.available);
+  const visibleAgents = agents.filter(isVisibleLocalCliAgent);
+  const available = visibleAgents.filter((a) => a.available);
   const currentAgent = agents.find((a) => a.id === agentId);
 
   return (
     <div className="picker agent-picker">
       <span className="picker-label">{t('agentPicker.label')}</span>
-      <select
+      <Select
         value={mode}
         onChange={(e) => onModeChange(e.target.value as ExecMode)}
         title={t('agentPicker.modeChoose')}
@@ -36,10 +39,10 @@ export function AgentPicker({
           {t('agentPicker.localCli')} {daemonLive ? '' : `· ${t('agentPicker.daemonOff')}`}
         </option>
         <option value="api">{t('agentPicker.byok')}</option>
-      </select>
+      </Select>
       {mode === 'daemon' ? (
         <>
-          <select
+          <Select
             value={agentId ?? ''}
             onChange={(e) => onAgentChange(e.target.value)}
             disabled={available.length === 0}
@@ -52,20 +55,20 @@ export function AgentPicker({
             {available.length === 0 ? (
               <option value="">{t('agentPicker.noAgents')}</option>
             ) : null}
-            {agents.map((a) => (
+            {visibleAgents.map((a) => (
               <option key={a.id} value={a.id} disabled={!a.available}>
                 {a.name}
                 {a.available ? '' : ` · ${t('agentPicker.notInstalled')}`}
               </option>
             ))}
-          </select>
-          <button
+          </Select>
+          <Button
+            size="icon"
             onClick={onRefresh}
             title={t('agentPicker.rescan')}
-            className="icon-btn"
           >
             ↻
-          </button>
+          </Button>
         </>
       ) : null}
     </div>

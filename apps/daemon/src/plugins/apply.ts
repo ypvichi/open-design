@@ -41,6 +41,8 @@ import {
   type ConnectorProbe,
 } from './connector-gate.js';
 import { deriveAutoAtomSurfaces } from './atoms/auto-surfaces.js';
+import { ensureCoreQualityStages } from './ensure-core-stages.js';
+import { getManifestContextCraft } from './context-craft.js';
 
 export class MissingInputError extends Error {
   readonly fields: string[];
@@ -128,7 +130,18 @@ export function applyPlugin(input: ApplyInput): ApplyComputed {
     manifest,
     scenarios: input.registry.scenarios,
   });
-  const appliedPipeline = pipelineResolution.pipeline;
+  // Core quality-stage floor: a template/plugin that ships a
+  // generate-only pipeline (to reuse a locked reference seed) still runs
+  // the `plan` (TodoWrite) and `critique` (5-dimension quality /
+  // anti-slop) stages, so the five-stage main flow is stable whether the
+  // artifact came from a free-form prompt or a plugin. Pure media stays
+  // generate-only. See ensure-core-stages.ts for the full rationale.
+  const appliedPipeline = ensureCoreQualityStages({
+    pipeline: pipelineResolution.pipeline,
+    taskKind,
+    mode: manifest.od?.mode,
+    source: pipelineResolution.source,
+  });
 
   const declaredSurfaces = manifest.od?.genui?.surfaces ?? [];
   const autoOAuth = input.connectorProbe
@@ -146,17 +159,20 @@ export function applyPlugin(input: ApplyInput): ApplyComputed {
     autoAtom,
   );
 
+  const pluginTitle = resolveLocalizedText(manifest.title_i18n, input.locale) || (manifest.title ?? manifest.name);
+  const pluginDescription =
+    resolveLocalizedText(manifest.description_i18n, input.locale) || manifest.description;
+
   const projectMetadata: PluginProjectMetadataPatch = {
-    name: manifest.title ?? manifest.name,
+    name: pluginTitle,
     taskKind,
   };
   const skillRef = pickFirstSkillId(manifest);
   if (skillRef) projectMetadata.skillId = skillRef;
   const dsId = pickDesignSystemId(manifest, input.activeProjectDesignSystem);
   if (dsId) projectMetadata.designSystemId = dsId;
-  if (Array.isArray(manifest.od?.context?.craft) && manifest.od!.context!.craft!.length > 0) {
-    projectMetadata.craftRequires = manifest.od!.context!.craft!.slice();
-  }
+  const craftRequires = getManifestContextCraft(manifest);
+  if (craftRequires.length > 0) projectMetadata.craftRequires = craftRequires;
 
   const queryText = resolveLocalizedText(manifest.od?.useCase?.query, input.locale);
 
@@ -177,6 +193,7 @@ export function applyPlugin(input: ApplyInput): ApplyComputed {
     pinnedRef:            input.plugin.pinnedRef,
     inputs:               validated.coerced,
     resolvedContext:      resolved.context,
+    craftRequires,
     capabilitiesGranted:  granted,
     capabilitiesRequired: required,
     assetsStaged:         assets,
@@ -187,8 +204,8 @@ export function applyPlugin(input: ApplyInput): ApplyComputed {
     mcpServers,
     pipeline:             appliedPipeline,
     genuiSurfaces,
-    pluginTitle:          manifest.title ?? manifest.name,
-    pluginDescription:    manifest.description,
+    pluginTitle,
+    pluginDescription,
     query:                queryText || undefined,
     status:               'fresh',
   };

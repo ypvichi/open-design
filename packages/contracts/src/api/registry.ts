@@ -1,6 +1,97 @@
+export type ModelCost = 'low' | 'medium' | 'high' | 'very_high';
+
+export type ModelCapability = 'standard' | 'advanced' | 'best_quality';
+
+export interface ModelMetadata {
+  cost?: ModelCost;
+  capability?: ModelCapability;
+}
+
 export interface AgentModelOption {
   id: string;
   label: string;
+  /** Whether the current account/tier can use this model. */
+  enabled?: boolean;
+  /** Whether this is the default model for the current account/tier. */
+  default?: boolean;
+  /** USD price per 1M input tokens when reported by the provider/catalog. */
+  inputPriceUsdPerMillion?: number;
+  /** USD price per 1M output tokens when reported by the provider/catalog. */
+  outputPriceUsdPerMillion?: number;
+  /** Provider/catalog-owned model picker metadata. */
+  metadata?: ModelMetadata;
+}
+
+/**
+ * A typed "what should the UI do to fix this" intent attached to an
+ * {@link AgentDiagnostic}. The UI renders a button per intent and owns the
+ * concrete handler (open a URL, re-run detection, write an env override,
+ * launch the OAuth terminal flow). Keeping the intent typed — rather than a
+ * pre-baked button label + URL — means the Settings card, the unavailable
+ * grid, and (PR-B) the `od agent healthcheck` CLI / health-check panel all
+ * render the same fix affordances from one source of truth instead of each
+ * re-deriving copy and wiring.
+ */
+export type AgentFixIntent =
+  /** Open the agent's configuration / auth docs (`AgentInfo.docsUrl`). */
+  | { kind: 'openDocs' }
+  /** Open the agent's install / download page (`AgentInfo.installUrl`). */
+  | { kind: 'openInstall' }
+  /** Re-run agent detection (the Settings "Rescan" affordance). */
+  | { kind: 'rescan' }
+  /**
+   * Prompt the user to point Open Design at an explicit binary by writing
+   * `envKey` (e.g. `CURSOR_AGENT_BIN`) into `agentCliEnv`. Used when the CLI
+   * is installed somewhere PATH detection can't reach.
+   */
+  | { kind: 'setEnv'; envKey: string }
+  /** Clear a previously-set binary override so detection falls back to PATH. */
+  | { kind: 'clearEnv'; envKey: string }
+  /**
+   * Launch the agent's interactive sign-in in a system terminal (today only
+   * Antigravity's `agy`, via POST /api/agents/:id/oauth-launch).
+   */
+  | { kind: 'launchOAuth'; agentId: string };
+
+/**
+ * Why a CLI agent is unavailable or only partially usable, in a shape the UI
+ * can render as "one-line reason + fix button(s)" instead of a silent grey
+ * card. Emitted by daemon detection (PATH / executable resolution + the auth
+ * probe) and reused by the connection-test / health-check surfaces so a
+ * failure is always actionable.
+ */
+export type AgentDiagnosticReason =
+  /** The binary (and any fallback names) was not found on PATH. */
+  | 'not-on-path'
+  /** A file matched but is not executable (missing +x / wrong PATHEXT). */
+  | 'not-executable'
+  /** A wrapper/shim was found but its target is gone (exit 126/127). */
+  | 'shim-broken'
+  /** A user-set `*_BIN` override points at a missing/invalid file. */
+  | 'configured-bin-invalid'
+  /** Installed and invocable, but the CLI is not authenticated. */
+  | 'auth-missing'
+  /** Installed, but auth status could not be verified. */
+  | 'auth-unknown';
+
+export type AgentDiagnosticSeverity = 'error' | 'warning' | 'info';
+
+export interface AgentDiagnostic {
+  reason: AgentDiagnosticReason;
+  severity: AgentDiagnosticSeverity;
+  /** Short, human-readable, single-sentence explanation. */
+  message: string;
+  /** Optional longer context (e.g. the probe's stderr tail). */
+  detail?: string;
+  /**
+   * Directories PATH detection searched, surfaced verbatim for the
+   * `not-on-path` case so the user can see where we looked before being
+   * asked to set an explicit binary path. Sourced from the daemon resolver,
+   * never recomputed in the client.
+   */
+  searchedDirs?: string[];
+  /** Ordered fix affordances the UI should offer for this diagnostic. */
+  fixActions?: AgentFixIntent[];
 }
 
 export interface AgentInfo {
@@ -12,6 +103,12 @@ export interface AgentInfo {
   authMessage?: string;
   path?: string;
   version?: string | null;
+  /**
+   * Actionable reasons this agent is unavailable or only partially usable,
+   * each carrying typed fix intents. Empty / omitted means "healthy"
+   * (available and, where probed, authenticated).
+   */
+  diagnostics?: AgentDiagnostic[];
   models?: AgentModelOption[];
   /** Whether models came from the installed CLI or Open Design's static fallback. */
   modelsSource?: 'live' | 'fallback';
@@ -32,10 +129,28 @@ export interface AgentInfo {
     | 'claude-mcp-json'
     | 'acp-merge'
     | 'opencode-env-content';
+  /**
+   * When `false`, the Settings model picker hides the "Custom (fill below)"
+   * option and the free-text input. Use this for agents whose CLI doesn't
+   * accept a model id (e.g. Antigravity `agy` has no `--model` flag yet —
+   * upstream issue #35) or rejects free-form ids (AMR validates against the
+   * live Vela catalog). Undefined === allow, matching the historical UX.
+   */
+  supportsCustomModel?: boolean;
 }
 
 export interface AgentsResponse {
   agents: AgentInfo[];
+}
+
+export type AmrModelsSource = 'preset' | 'remote';
+
+export interface AmrModelsResponse {
+  source: AmrModelsSource;
+  models: AgentModelOption[];
+  refreshing: boolean;
+  stale?: boolean;
+  remoteError?: string;
 }
 
 export type SkillSource = 'built-in' | 'user';
@@ -43,7 +158,9 @@ export type SkillSource = 'built-in' | 'user';
 export interface SkillSummary {
   id: string;
   name: string;
+  displayName?: Record<string, string>;
   description: string;
+  descriptionI18n?: Record<string, string>;
   triggers: string[];
   mode:
     | 'prototype'
@@ -77,6 +194,7 @@ export interface SkillSummary {
   craftRequires?: string[];
   hasBody: boolean;
   examplePrompt: string;
+  examplePromptI18n?: Record<string, string>;
   // True when this skill exists only to group derived `<parent>:<child>`
   // example cards. The Examples gallery hides such cards because their
   // preview would duplicate one of the derived cards and add no extra
@@ -183,10 +301,24 @@ export interface DesignSystemPackageInfo {
     id: string;
     name: string;
     category: string;
-    source?: { type?: string; url?: string; path?: string; branch?: string; commit?: string; importedAt?: string };
+    source?: {
+      type?: string;
+      url?: string;
+      path?: string;
+      branch?: string;
+      commit?: string;
+      importedAt?: string;
+      // shadcn registry imports (source.type === 'shadcn').
+      reference?: string;
+      registryUrl?: string;
+      item?: string;
+      homepage?: string;
+    };
     files?: {
       design?: string;
       tokens?: string;
+      designTokens?: string;
+      tailwind?: string;
       components?: string;
     };
     usage?: string;
@@ -206,16 +338,29 @@ export interface DesignSystemPackageInfo {
       scanned?: string;
       evidence?: string;
       tokens?: string;
+      report?: string;
       snippets?: string;
     };
     assetsDir?: string;
   };
+  /** Package-relative files the daemon confirmed exist and can be served via /static. */
+  availableFiles?: string[];
   sourceEvidence?: {
     scannedFileCount?: number;
     tokenCount?: number;
     snippetCount?: number;
     confidence?: Record<string, string | number>;
     evidenceExcerpt?: string;
+    tokenContract?: {
+      contract?: string;
+      grade?: DesignSystemTokenContractGrade;
+      score?: number;
+      recommendRebuild?: boolean;
+      sourceBackedA1?: number;
+      requiredA1?: number;
+      fallbackTokens?: number;
+      selfCheckOk?: boolean;
+    };
   };
 }
 
@@ -229,6 +374,7 @@ export interface DesignSystemResponse {
 
 export interface DesignSystemProvenance {
   companyBlurb?: string;
+  sourceUrls?: string[];
   githubUrls?: string[];
   localCodeFiles?: string[];
   figFiles?: string[];
@@ -284,6 +430,13 @@ export interface DesignSystemRevision {
   updatedAt: string;
   sectionTitle?: string;
   jobId?: string;
+  fileChanges?: DesignSystemRevisionFileChange[];
+}
+
+export interface DesignSystemRevisionFileChange {
+  path: string;
+  baseContent: string;
+  proposedContent: string;
 }
 
 export interface DesignSystemRevisionsResponse {
@@ -317,7 +470,7 @@ export interface DesignSystemGenerationStep {
 
 export interface DesignSystemGenerationJob {
   id: string;
-  kind?: 'generation' | 'revision';
+  kind?: 'generation' | 'revision' | 'token-contract-rebuild';
   status: DesignSystemGenerationJobStatus;
   progress: number;
   steps: DesignSystemGenerationStep[];
@@ -361,6 +514,44 @@ export interface DesignSystemRevisionJobRequest {
   body?: string;
 }
 
+export type DesignSystemTokenContractGrade =
+  | 'excellent'
+  | 'usable'
+  | 'needs-review'
+  | 'needs-rebuild';
+
+export interface DesignSystemTokenContractRebuildDecision {
+  designSystemId: string;
+  available: boolean;
+  recommended: boolean;
+  forced: boolean;
+  reason: string;
+  triggers: string[];
+  reportPath?: string;
+  grade?: DesignSystemTokenContractGrade;
+  score?: number;
+  sourceBackedA1?: number;
+  requiredA1?: number;
+  fallbackTokens?: number;
+  selfCheckOk?: boolean;
+  weakTokens?: Array<{
+    name: string;
+    layer?: string;
+    confidence: string;
+    reason: string;
+    sources: string[];
+  }>;
+}
+
+export interface DesignSystemTokenContractRebuildJobRequest {
+  force?: boolean;
+}
+
+export interface DesignSystemTokenContractRebuildJobResponse {
+  decision: DesignSystemTokenContractRebuildDecision;
+  job?: DesignSystemGenerationJob;
+}
+
 export interface ImportLocalDesignSystemRequest {
   /** Absolute local project directory selected by the user. */
   baseDir: string;
@@ -374,6 +565,7 @@ export interface ImportLocalDesignSystemRequest {
 
 export interface ImportLocalDesignSystemResponse {
   designSystem: DesignSystemSummary;
+  tokenContractRebuild?: DesignSystemTokenContractRebuildJobResponse;
 }
 
 export interface ImportGitHubDesignSystemRequest {
@@ -391,6 +583,31 @@ export interface ImportGitHubDesignSystemRequest {
 
 export interface ImportGitHubDesignSystemResponse {
   designSystem: DesignSystemSummary;
+  tokenContractRebuild?: DesignSystemTokenContractRebuildJobResponse;
+}
+
+export interface ImportShadcnDesignSystemRequest {
+  /**
+   * shadcn registry item reference. Accepts either the shadcn CLI
+   * shorthand `<owner>/<repo>/<item>` (optionally suffixed with
+   * `#<branch|tag|sha>`), which is resolved against the repository's
+   * root `registry.json` on GitHub, or a direct `https://…/<item>.json`
+   * URL pointing at a registry-item document. `http://` is accepted only
+   * for loopback hosts (localhost / 127.0.0.1) so a self-hosted local
+   * registry can be imported.
+   */
+  reference: string;
+  /** Optional display name override for the generated design-system project. */
+  name?: string;
+  /** Import structure mode. Defaults to hybrid for real project imports. */
+  importMode?: 'normalized' | 'hybrid' | 'verbatim';
+  /** Craft sections that should actively apply when this system is used. */
+  craftApplies?: string[];
+}
+
+export interface ImportShadcnDesignSystemResponse {
+  designSystem: DesignSystemSummary;
+  tokenContractRebuild?: DesignSystemTokenContractRebuildJobResponse;
 }
 
 export interface HealthResponse {

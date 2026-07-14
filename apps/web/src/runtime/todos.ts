@@ -1,3 +1,4 @@
+import { todoStatusIsUnfinished } from '@open-design/contracts';
 import type { AgentEvent } from '../types';
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'stopped';
@@ -10,25 +11,52 @@ export interface TodoItem {
 
 export function parseTodoWriteInput(input: unknown): TodoItem[] {
   if (!input || typeof input !== 'object') return [];
-  const obj = input as { todos?: unknown };
-  if (!Array.isArray(obj.todos)) return [];
-  return obj.todos
+  const obj = input as { plan?: unknown; todos?: unknown };
+  const rawItems = Array.isArray(obj.todos)
+    ? obj.todos
+    : Array.isArray(obj.plan)
+      ? obj.plan
+      : [];
+  return rawItems
     .map((todo): TodoItem | null => {
       if (!todo || typeof todo !== 'object') return null;
       const record = todo as Record<string, unknown>;
-      const content = typeof record.content === 'string' ? record.content : '';
+      const content =
+        typeof record.content === 'string'
+          ? record.content
+          : typeof record.step === 'string'
+            ? record.step
+            : typeof record.description === 'string'
+              ? record.description
+              : typeof record.label === 'string'
+                ? record.label
+                : typeof record.text === 'string'
+                  ? record.text
+                  : '';
       if (!content) return null;
-      const status =
-        record.status === 'completed' || record.status === 'in_progress' || record.status === 'stopped'
-          ? record.status
-          : 'pending';
+      const status = normalizeTodoStatus(record.status);
       return {
         content,
         status,
-        activeForm: typeof record.activeForm === 'string' ? record.activeForm : undefined,
+        activeForm:
+          typeof record.activeForm === 'string'
+            ? record.activeForm
+            : typeof record.active_form === 'string'
+              ? record.active_form
+              : undefined,
       };
     })
     .filter((todo): todo is TodoItem => todo !== null);
+}
+
+function normalizeTodoStatus(status: unknown): TodoStatus {
+  if (status === 'completed' || status === 'in_progress' || status === 'stopped') {
+    return status;
+  }
+  if (status === 'cancelled' || status === 'canceled' || status === 'failed') {
+    return 'stopped';
+  }
+  return 'pending';
 }
 
 export function latestTodosFromEvents(events: AgentEvent[] | undefined): TodoItem[] {
@@ -42,7 +70,10 @@ export function latestTodosFromEvents(events: AgentEvent[] | undefined): TodoIte
 }
 
 export function unfinishedTodosFromEvents(events: AgentEvent[] | undefined): TodoItem[] {
-  return latestTodosFromEvents(events).filter((todo) => todo.status !== 'completed');
+  // Uses the SAME canonical predicate the daemon stamps `endedWithUnfinishedWork`
+  // with (todoStatusIsUnfinished), so this footer and the Pet task center / project
+  // pill can never disagree about whether a run's work is finished (#1247 / #1060).
+  return latestTodosFromEvents(events).filter((todo) => todoStatusIsUnfinished(todo.status));
 }
 
 // Walk the conversation in reverse to find the most recent TodoWrite
@@ -93,8 +124,13 @@ export function latestTodoWriteInputForPinnedCard<
   return null;
 }
 
-function isTodoWriteToolName(name: string): boolean {
-  return name === 'TodoWrite' || name === 'todowrite';
+export function isTodoWriteToolName(name: string): boolean {
+  return (
+    name === 'TodoWrite' ||
+    name === 'todowrite' ||
+    name === 'todo_write' ||
+    name === 'update_plan'
+  );
 }
 
 function hasTerminalRunEnded(
@@ -111,11 +147,13 @@ function hasTerminalRunEnded(
 
 function stoppedTodoWriteInput(input: unknown): unknown {
   if (!input || typeof input !== 'object') return input;
-  const obj = input as { todos?: unknown };
-  if (!Array.isArray(obj.todos)) return input;
+  const obj = input as { todos?: unknown; plan?: unknown };
+  const key = Array.isArray(obj.todos) ? 'todos' : Array.isArray(obj.plan) ? 'plan' : null;
+  if (!key) return input;
+  const items = obj[key] as unknown[];
   return {
     ...(input as Record<string, unknown>),
-    todos: obj.todos.map((todo) => {
+    [key]: items.map((todo) => {
       if (!todo || typeof todo !== 'object') return todo;
       const record = todo as Record<string, unknown>;
       if (record.status !== 'in_progress') return todo;

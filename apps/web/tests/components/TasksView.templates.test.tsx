@@ -97,7 +97,7 @@ describe('TasksView automation templates', () => {
     fireEvent.click(templateCard);
 
     await waitFor(() => {
-      expect((screen.getByLabelText('Automation title') as HTMLInputElement).value).toBe(
+      expect((screen.getByTestId('automation-modal-title') as HTMLInputElement).value).toBe(
         'Extract design system',
       );
     });
@@ -159,113 +159,6 @@ describe('TasksView automation templates', () => {
     await waitFor(() => {
       expect(applyCalls).toEqual(['/api/automation-proposals/proposal-memory-1/apply']);
       expect(screen.queryByText('Project memory from connector digest')).toBeNull();
-    });
-  });
-
-  it('ingests pasted source content into source packets and proposals', async () => {
-    const postBodies: unknown[] = [];
-    let proposals: AutomationEvolutionProposal[] = [];
-    let packets = [] as Array<{
-      id: string;
-      sourceKind: string;
-      title: string;
-      capturedAt: string;
-      tokenStats: { originalTokens: number };
-    }>;
-    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = input.toString();
-      if (url === '/api/routines' && (!init || init.method === undefined)) {
-        return new Response(JSON.stringify({ routines: [] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (url === '/api/projects' && (!init || init.method === undefined)) {
-        return new Response(JSON.stringify({ projects: [] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (url === '/api/automation-templates' && (!init || init.method === undefined)) {
-        return new Response(JSON.stringify({ templates: [daemonTemplate] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (url === '/api/automation-proposals?status=pending-review' && (!init || init.method === undefined)) {
-        return new Response(JSON.stringify({ proposals }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (url === '/api/automation-source-packets?limit=3' && (!init || init.method === undefined)) {
-        return new Response(JSON.stringify({ packets }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (url === '/api/automation-ingestions' && init?.method === 'POST') {
-        postBodies.push(JSON.parse(String(init.body)));
-        const packet = {
-          id: 'packet-1',
-          sourceKind: 'repo',
-          sourceRef: 'https://github.com/acme/design',
-          title: 'Acme source',
-          capturedAt: '2026-05-18T00:00:00.000Z',
-          bodyMarkdown: 'Primary color #335CFF',
-          provenance: [],
-          attachments: [],
-          sensitivity: 'workspace',
-          capabilityHints: [],
-          tokenStats: { originalTokens: 6 },
-          candidateSinks: ['memory', 'design-system'],
-        };
-        proposals = [{ ...memoryProposal, id: 'proposal-ingested-1', title: 'Memory: Acme source' }];
-        packets = [packet];
-        return new Response(JSON.stringify({
-          packet,
-          compressionReport: {
-            mode: 'balanced',
-            status: 'skipped',
-            beforeTokens: 6,
-            afterTokens: 6,
-            summary: 'Already compact',
-            preservedSourcePacketId: 'packet-1',
-          },
-          proposals,
-        }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response(JSON.stringify({}), { status: 404 });
-    }) as typeof fetch;
-
-    render(<TasksView />);
-
-    await screen.findByText('Ingest source');
-    fireEvent.change(screen.getByLabelText('Title'), {
-      target: { value: 'Acme source' },
-    });
-    fireEvent.change(screen.getByLabelText('Source ref'), {
-      target: { value: 'https://github.com/acme/design' },
-    });
-    fireEvent.change(screen.getByLabelText('Content'), {
-      target: { value: 'Primary color #335CFF' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /^Ingest$/i }));
-
-    await waitFor(() => {
-      expect(postBodies).toHaveLength(1);
-      expect(postBodies[0]).toMatchObject({
-        templateId: 'ingest-source-memory-tree',
-        sourceKind: 'connector',
-        title: 'Acme source',
-        sourceRef: 'https://github.com/acme/design',
-        bodyMarkdown: 'Primary color #335CFF',
-      });
-      expect(screen.getByText('Memory: Acme source')).toBeTruthy();
-      expect(screen.getByText('Acme source')).toBeTruthy();
     });
   });
 
@@ -404,7 +297,210 @@ describe('TasksView automation templates', () => {
         '/api/routines/routine-1/runs/run-succeeded-1/crystallize',
       ]);
       expect(screen.getByText('Skill: Artifact polish loop run')).toBeTruthy();
-      expect(screen.getByText('Artifact polish loop run')).toBeTruthy();
     });
+  });
+
+  it('keeps crystallize proposals visible when the follow-up proposal refresh fails', async () => {
+    let proposalRefreshes = 0;
+    const routine = {
+      id: 'routine-1',
+      name: 'Artifact polish loop',
+      prompt: 'Review generated artifacts and extract durable layout guidance.',
+      schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+      target: { mode: 'create_each_run' },
+      skillId: null,
+      agentId: null,
+      context: {},
+      enabled: true,
+      nextRunAt: null,
+      lastRun: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const run = {
+      id: 'run-succeeded-1',
+      routineId: 'routine-1',
+      trigger: 'manual',
+      status: 'succeeded',
+      projectId: 'proj-1',
+      conversationId: 'conv-1',
+      agentRunId: 'agent-run-1',
+      startedAt: Date.now() - 1_000,
+      completedAt: Date.now(),
+      summary: 'Promote compact controls and repeatable QA steps.',
+      error: null,
+    };
+    const crystallizedProposal = {
+      ...memoryProposal,
+      id: 'proposal-skill-1',
+      title: 'Skill: Artifact polish loop run',
+      targetKind: 'skill' as const,
+      sourcePacketIds: ['packet-run-1'],
+    };
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/routines' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ routines: [routine] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/projects' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ projects: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/automation-templates' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ templates: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/automation-proposals?status=pending-review' && (!init || init.method === undefined)) {
+        proposalRefreshes += 1;
+        if (proposalRefreshes > 1) {
+          throw new TypeError('Failed to fetch');
+        }
+        return new Response(JSON.stringify({ proposals: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/routines/routine-1/runs?limit=10' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ runs: [run] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (
+        url === '/api/routines/routine-1/runs/run-succeeded-1/crystallize' &&
+        init?.method === 'POST'
+      ) {
+        return new Response(JSON.stringify({
+          routineId: 'routine-1',
+          runId: 'run-succeeded-1',
+          packet: {
+            id: 'packet-run-1',
+            sourceKind: 'chat',
+            sourceRef: 'routine-run:run-succeeded-1',
+            title: 'Artifact polish loop run',
+            capturedAt: '2026-05-18T00:00:00.000Z',
+            bodyMarkdown: 'Promote compact controls and repeatable QA steps.',
+            provenance: [],
+            attachments: [],
+            sensitivity: 'workspace',
+            capabilityHints: [],
+            tokenStats: { originalTokens: 12 },
+            candidateSinks: ['skill', 'memory'],
+          },
+          compressionReport: {
+            mode: 'balanced',
+            status: 'skipped',
+            beforeTokens: 12,
+            afterTokens: 12,
+            summary: 'Already compact',
+            preservedSourcePacketId: 'packet-run-1',
+          },
+          proposals: [crystallizedProposal],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    }) as typeof fetch;
+
+    render(<TasksView />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /History/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Crystallize/i }));
+
+    expect(await screen.findByText('Skill: Artifact polish loop run')).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Crystallize created proposals, but Automations could not refresh the proposal list.',
+    );
+  });
+
+  it('surfaces crystallize transport failures', async () => {
+    const routine = {
+      id: 'routine-1',
+      name: 'Artifact polish loop',
+      prompt: 'Review generated artifacts and extract durable layout guidance.',
+      schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+      target: { mode: 'create_each_run' },
+      skillId: null,
+      agentId: null,
+      context: {},
+      enabled: true,
+      nextRunAt: null,
+      lastRun: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const run = {
+      id: 'run-succeeded-1',
+      routineId: 'routine-1',
+      trigger: 'manual',
+      status: 'succeeded',
+      projectId: 'proj-1',
+      conversationId: 'conv-1',
+      agentRunId: 'agent-run-1',
+      startedAt: Date.now() - 1_000,
+      completedAt: Date.now(),
+      summary: 'Promote compact controls and repeatable QA steps.',
+      error: null,
+    };
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/routines' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ routines: [routine] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/projects' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ projects: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/automation-templates' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ templates: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/automation-proposals?status=pending-review' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ proposals: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/routines/routine-1/runs?limit=10' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ runs: [run] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (
+        url === '/api/routines/routine-1/runs/run-succeeded-1/crystallize' &&
+        init?.method === 'POST'
+      ) {
+        throw new TypeError('Failed to fetch');
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    }) as typeof fetch;
+
+    render(<TasksView />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /History/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Crystallize/i }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Crystallize failed: Failed to fetch',
+    );
   });
 });

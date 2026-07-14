@@ -20,18 +20,51 @@ up turn doesn't re-ask).
 - Brief explicitly invites questions ("ask me anything if unclear").
 - The discovery skill or pipeline declares a `discovery` stage.
 
-## Question shape (as the agent emits one)
+## Emission shape
 
-```jsonc
+Emit the form as a `question-form` block whose body is a JSON object with a
+top-level `questions` array. Do not emit a bare question object by itself; the
+renderer only recognizes the wrapped form contract.
+
+```html
+<question-form id="discovery" title="Quick brief — 30 seconds">
 {
-  "id": "audience",
-  "label": "Who's the primary audience?",
-  "type": "checkbox",      // or 'radio' | 'text' | 'number'
-  "options": ["VC", "Customer", "Internal team"],
-  "maxSelections": 2,
-  "required": true
+  "description": "I'll lock these in before building. Skip what doesn't apply — I'll fill defaults.",
+  "questions": [
+    {
+      "id": "audience",
+      "label": "Who's the primary audience?",
+      "type": "checkbox",
+      "options": ["VC", "Customer", "Internal team"],
+      "maxSelections": 2,
+      "required": true
+    }
+  ]
 }
+</question-form>
 ```
+
+## Question object shape
+
+Each entry in the top-level `questions` array uses:
+
+- `id`: stable answer key, for example `audience`.
+- `label`: user-facing question copy.
+- `type`: one of `radio`, `checkbox`, `select`, `text`, `textarea`,
+  `number`, `range`, `date`, `time`, `datetime-local`, `color`, `url`,
+  `email`, `tel`, `file`, `switch`, or `direction-cards`.
+- `options`: required for choice controls; strings are allowed, or objects with
+  localized `label` and stable `value`.
+- `allowCustom`: leave unset or set to `true` for finite-choice controls so
+  users can type their own answer instead of accepting only generated options.
+  Set `allowCustom: false` only when the downstream system needs an exact
+  machine id.
+- `customLabel` / `customPlaceholder`: optional localized copy for that custom
+  answer input.
+- `maxSelections`: include this for checkbox controls with a limited selection
+  count.
+- `required`: set to `true` only when the answer is needed before work can
+  continue.
 
 ## Convergence
 

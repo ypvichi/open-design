@@ -2,9 +2,19 @@
   "$schema": "https://open-design.ai/schemas/plugin.v1.json",
   "specVersion": "1.0.0",
   "name": "example-kami-deck",
-  "title": "Kami Deck",
+  "title": "Turn a Study into a Lab Meeting Deck like a Senior Postdoc",
+  "title_i18n": {
+    "en": "Turn a Study into a Lab Meeting Deck like a Senior Postdoc",
+    "zh-CN": "像资深博士后一样做组会研究汇报",
+    "zh-TW": "像资深博士后一样做组会研究汇报"
+  },
   "version": "0.1.0",
-  "description": "Produce a print-grade slide deck in the kami (紙 / 纸) design system — warm parchment background (or ink-blue for cover / chapter slides), serif at one weight, ink-blue accent ≤ 5% per slide, no italic. Horizontal magazine swipe pagination (←/→ · wheel · swipe · ESC overview). One self-contained HTML file, zero dependencies beyond Google Fonts.",
+  "description": "A lab-meeting deck on gut-microbiome links to sleep quality — the design, the results, the caveats, and the next experiment. Built as a decision-grade academic research deck for lab group, PI.",
+  "description_i18n": {
+    "en": "A lab-meeting deck on gut-microbiome links to sleep quality — the design, the results, the caveats, and the next experiment. Built as a decision-grade academic research deck for lab group, PI.",
+    "zh-CN": "像资深博士后一样做组会研究汇报——一份可商业交付的学术研究 Deck，围绕真实主题、证据链与决策目标组织。",
+    "zh-TW": "像资深博士后一样做组会研究汇报——一份可商业交付的学术研究 Deck，围绕真实主题、证据链与决策目标组织。"
+  },
   "license": "MIT",
   "author": {
     "name": "Open Design",
@@ -22,7 +32,18 @@
     "white-paper-deck",
     "editorial-deck",
     "print-style-slides",
-    "kami-slides"
+    "kami-slides",
+    "product",
+    "roadmap",
+    "architecture",
+    "product-and-technical-management",
+    "academic-research",
+    "academic-review-deck",
+    "research",
+    "grant",
+    "review",
+    "decision-deck",
+    "commercial-slide-agent"
   ],
   "compat": {
     "agentSkills": [
@@ -35,7 +56,7 @@
     "kind": "scenario",
     "taskKind": "new-generation",
     "mode": "deck",
-    "scenario": "marketing",
+    "scenario": "research",
     "surface": "web",
     "preview": {
       "type": "html",
@@ -43,13 +64,18 @@
     },
     "useCase": {
       "query": {
-        "en": "Produce a print-grade slide deck in the kami (紙 / 纸) design system — warm parchment background (or ink-blue for cover / chapter slides), serif at one weight, ink-blue accent ≤ 5% per slide, no italic. Horizontal magazine swipe pagination (←/→ · wheel · swipe · ESC overview). One self-contained HTML file, zero dependenc",
-        "zh-CN": "Produce a print-grade slide deck in the kami (紙 / 纸) design system — warm parchment background (or ink-blue for cover / chapter slides), serif at one weight, ink-blue accent ≤ 5% per slide, no italic. Horizontal magazine swipe pagination (←/→ · wheel · swipe · ESC overview). One self-contained HTML file, zero dependenc"
+        "en": "Create \"Turn a Study into a Lab Meeting Deck like a Senior Postdoc\" as a decision-grade Academic research deck in this template's own visual system. Subject: A lab-meeting deck on gut-microbiome links to sleep quality — the design, the results, the caveats, and the next experiment. Audience: lab group, PI. First ask only for missing essentials: audience, decision target, source-of-truth materials, deadline, and must-keep numbers. Then produce the slide plan, written slides, visual direction, speaker-ready structure, and a critic pass against this rubric: does the deck prove novelty without overclaiming.",
+        "zh-CN": "像资深博士后一样做组会研究汇报。像资深博士后一样做组会研究汇报——一份可商业交付的学术研究 Deck，围绕真实主题、证据链与决策目标组织。 主题：A lab-meeting deck on gut-microbiome links to sleep quality — the design, the results, the caveats, and the next experiment. 先确认受众、决策目标、素材来源、截止时间和必须保留的数据，再输出叙事主线、页面规划、逐页文案、视觉方向和按评审标准自检的版本。"
       },
       "exampleOutputs": [
         {
           "path": "./example.html",
-          "title": "Kami Deck"
+          "title": "Turn a Study into a Lab Meeting Deck like a Senior Postdoc",
+          "title_i18n": {
+            "en": "Turn a Study into a Lab Meeting Deck like a Senior Postdoc",
+            "zh-CN": "像资深博士后一样做组会研究汇报",
+            "zh-TW": "像资深博士后一样做组会研究汇报"
+          }
         }
       ]
     },
@@ -81,6 +107,7 @@
     "capabilities": [
       "prompt:inject",
       "fs:write"
-    ]
+    ],
+    "category": "academic-research"
   }
 }
