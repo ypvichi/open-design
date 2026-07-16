@@ -100,7 +100,7 @@ import { WhatsNewPopup } from './WhatsNewPopup';
 import { AmrBalanceDialog } from './AmrBalanceDialog';
 import { AmrLowBalanceDialog, type AmrLowBalanceDecision } from './AmrLowBalanceDialog';
 import { checkAmrBalanceGate } from '../runtime/amr-balance-gate';
-import { resolveAmrLowBalancePlan } from '../runtime/amr-low-balance-plan';
+import { isPaidAmrPlan, resolveAmrPlan } from '../runtime/amr-low-balance-plan';
 import { GithubStarBadge } from './GithubStarBadge';
 import {
   formatDiscordPresenceCount,
@@ -388,6 +388,10 @@ interface Props {
   onApiProtocolChange: (protocol: ApiProtocol) => void;
   onApiModelChange: (model: string) => void;
   onConfigPersist: (cfg: AppConfig) => Promise<void> | void;
+  /** True only when GET /api/app-config returned a real config object. */
+  daemonAppConfigReady?: boolean;
+  /** Non-optimistic daemon write for the silent-update preference. */
+  onSilentUpdatePreferenceChange?: (allowSilentUpdates: boolean) => Promise<void>;
   onSkillsRefresh?: () => Promise<void> | void;
   onSkillsChanged?: (affectedSkillId?: string) => void;
   onRefreshAgents: () => Promise<AgentInfo[]> | AgentInfo[];
@@ -425,6 +429,7 @@ interface Props {
   onPersistComposioKey: (composio: AppConfig['composio']) => Promise<void> | void;
   onOpenSettings: (section?: EntrySettingsSection) => void;
   onCompleteOnboarding: () => void;
+  artifactUpgradeSlot?: ReactNode;
 }
 
 // Map an EntryNavRail view id to the analytics `element` enum on
@@ -503,6 +508,8 @@ export function EntryShell({
   onApiProtocolChange,
   onApiModelChange,
   onConfigPersist,
+  daemonAppConfigReady = false,
+  onSilentUpdatePreferenceChange,
   onSkillsRefresh,
   onSkillsChanged,
   onRefreshAgents,
@@ -525,6 +532,7 @@ export function EntryShell({
   onPersistComposioKey,
   onOpenSettings,
   onCompleteOnboarding,
+  artifactUpgradeSlot,
 }: Props) {
   const t = useT();
   const { locale: uiLocale } = useI18n();
@@ -555,7 +563,6 @@ export function EntryShell({
   const [amrLowBalanceWarn, setAmrLowBalanceWarn] = useState<
     {
       snapshot: AmrWalletSnapshot;
-      plan: string | null;
       resolve: (decision: AmrLowBalanceDecision) => void;
     } | null
   >(null);
@@ -596,6 +603,12 @@ export function EntryShell({
   // §7.1). Cleared as soon as the user takes any concrete entry (spec §7.4).
   const [onboardingRec, setOnboardingRec] = useState<Recommendation | null>(null);
   const entryMainScrollRef = useRef<HTMLElement | null>(null);
+  // Entry views share this element, so route changes must not inherit the previous view's offset.
+  useLayoutEffect(() => {
+    const scrollContainer = entryMainScrollRef.current;
+    if (!scrollContainer) return;
+    scrollContainer.scrollTop = 0;
+  }, [view]);
   const analytics = useAnalytics();
   const discordOnlineLabel = discordPresence
     ? t('entry.discordOnlineLabel', {
@@ -735,12 +748,14 @@ export function EntryShell({
         // Hold THIS submit while the reminder waits for a decision; 'proceed'
         // resumes the same create-and-run below, so HomeView's normal accept
         // path (draft clearing, context consumption) still applies.
-        const plan = await resolveAmrLowBalancePlan(gate.snapshot);
-        const decision = await new Promise<AmrLowBalanceDecision>((resolve) => {
-          setAmrLowBalanceWarn({ snapshot: gate.snapshot, plan, resolve });
-        });
-        setAmrLowBalanceWarn(null);
-        if (decision !== 'proceed') return 'blocked' as const;
+        const plan = await resolveAmrPlan(gate.snapshot);
+        if (isPaidAmrPlan(plan)) {
+          const decision = await new Promise<AmrLowBalanceDecision>((resolve) => {
+            setAmrLowBalanceWarn({ snapshot: gate.snapshot, resolve });
+          });
+          setAmrLowBalanceWarn(null);
+          if (decision !== 'proceed') return 'blocked' as const;
+        }
       }
       // The decision (or clean pass) carries into the created project's first
       // auto-send, which must not re-prompt what the user just answered.
@@ -1061,8 +1076,10 @@ export function EntryShell({
             </div>
             <UpdaterPopup
               allowSilentUpdates={config.allowSilentUpdates}
-              onAllowSilentUpdatesChange={(allowSilentUpdates) =>
-                onConfigPersist({ ...config, allowSilentUpdates })
+              silentUpdatePreferenceReady={daemonAppConfigReady}
+              onAllowSilentUpdatesChange={
+                onSilentUpdatePreferenceChange
+                  ?? ((allowSilentUpdates) => onConfigPersist({ ...config, allowSilentUpdates }))
               }
             />
             <WhatsNewPopup active={view === 'home'} />
@@ -1082,7 +1099,6 @@ export function EntryShell({
             {amrLowBalanceWarn ? (
               <AmrLowBalanceDialog
                 balanceUsd={amrLowBalanceWarn.snapshot.balanceUsd}
-                plan={amrLowBalanceWarn.plan}
                 profile={amrLowBalanceWarn.snapshot.profile}
                 entrySource="home_low_balance_warn_recharge"
                 metricsConsent={config.telemetry?.metrics === true}
@@ -1125,6 +1141,7 @@ export function EntryShell({
                 onRecommendationStart={handleRecommendationStart}
                 onRecommendationDismiss={dismissRecommendation}
                 executionSwitcher={view === 'home' ? homeExecutionSwitcher : undefined}
+                artifactUpgradeSlot={artifactUpgradeSlot}
               />
             </div>
             <div data-testid="entry-view-projects" data-active={view === 'projects' ? 'true' : 'false'} {...inactiveViewProps(view === 'projects')}>
@@ -2561,7 +2578,7 @@ function OnboardingView({
         </div>
         <div className="onboarding-cloud__center">
           <span
-            className="onboarding-cloud__logo"
+            className="onboarding-cloud__logo od-brand-glyph"
             role="img"
             aria-label="Open Design"
           />
