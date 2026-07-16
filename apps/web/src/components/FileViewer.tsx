@@ -6172,7 +6172,7 @@ function HtmlViewer({
   }, []);
   const [deployConfig, setDeployConfig] = useState<WebDeployConfigResponse | null>(null);
   const [deploying, setDeploying] = useState(false);
-  const [deployPhase, setDeployPhase] = useState<'idle' | 'deploying' | 'preparing-link'>('idle');
+  const [deployPhase, setDeployPhase] = useState<'idle' | 'deploying' | 'preparing-link' | 'iux-server' | 'iux-marketplace'>('idle');
   const [savingDeployConfig, setSavingDeployConfig] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<WebDeployProjectFileResponse | null>(null);
@@ -9273,7 +9273,7 @@ function HtmlViewer({
 
   function openInNewTab() {
     if (!source) return;
-    openSandboxedPreviewInNewTab(source, exportTitle, {
+    return openSandboxedPreviewInNewTab(source, exportTitle, {
       deck: effectiveDeck,
       baseHref: projectRawUrl(projectId, baseDirFor(file.name)),
       initialSlideIndex: htmlPreviewSlideState.get(previewStateKey)?.active ?? 0,
@@ -9389,7 +9389,7 @@ function HtmlViewer({
     }
   }
 
-  async function openDeployModal(
+   async function openDeployModal(
     nextProviderId: WebDeployProviderId = deployProviderId,
     intent: 'deploy' | 'social-share' = 'deploy',
   ) {
@@ -9401,6 +9401,18 @@ function HtmlViewer({
     setCopiedDeployLink(null);
     setDeployPhase('idle');
     await loadDeployProvider(nextProviderId, { fallbackToExisting: true });
+  }
+  async function openIuxModal(
+    nextProviderId: any,
+    intent: 'deploy' | 'social-share' = 'deploy',
+  ) {
+    setDeployMenuOpen(false);
+    setDeployModalOpen(true);
+    setDeployModalIntent(intent);
+    setDeployError(null);
+    setDeployActionToast(null);
+    setCopiedDeployLink(null);
+    setDeployPhase(nextProviderId);
   }
 
   async function openSocialShareFlow() {
@@ -9466,7 +9478,23 @@ function HtmlViewer({
       domainPrefix: prefix,
     };
   }
-
+  async function deployToIux(type?:any){
+    setDeploying(true);
+    let fileData = file as any;
+    const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
+    const fileName = fileData.name;
+    //console.log('工程Id是',projectId,'文件名是',fileName)
+    fetchProjectFileText(projectId,fileName).then((text) => {
+        const html = text;
+        const params = {
+            projectId,
+            fileName,
+            html
+        }
+        console.log('我的html提交参数是',params);
+        setDeploying(false);
+    });
+  }
   async function deployToSelectedProvider() {
     setDeploying(true);
     setDeployPhase('deploying');
@@ -9615,7 +9643,30 @@ function HtmlViewer({
       setCopiedDeployLink((current) => (current === safeUrl ? null : current));
     }, 1800);
   }
-
+  function handleCopy(value:string){
+    const input = document.createElement("input");
+    input.value = value;
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand("copy");
+    document.body.removeChild(input);
+  }
+  async function copyLocalShareLink(){
+    let fileData = file as any;
+    const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
+    const fileName = fileData.name;
+    console.log('file',file,process.env.NEXT_PUBLIC_HTTP_SERVER_URL);
+    let lastUrl = `${process.env.NEXT_PUBLIC_HTTP_SERVER_URL}${projectId}/${fileName}`;
+    // firePresentPopoverClick('new_tab');
+    // let url = presentNewTab(true);
+    console.log('复制分享链接',lastUrl);
+    handleCopy(lastUrl)
+    setExportToast({
+        message:'复制分享链接成功',
+        tone: 'success',
+      });
+    //console.log('复制本地分享链路',file,liveArtifactPreviewUrl(projectId, liveArtifact.artifactId));
+  }
   async function copyShareLink(url: string) {
     const safeUrl = url.trim();
     if (!safeUrl) {
@@ -9654,7 +9705,7 @@ function HtmlViewer({
 
   function presentNewTab() {
     setPresentMenuOpen(false);
-    openInNewTab();
+    return openInNewTab();
   }
 
   function reloadHtmlPreview() {
@@ -11583,7 +11634,31 @@ function HtmlViewer({
                       <div className="share-menu-section-label" role="presentation">
                         {t('fileViewer.shareMenuShareLink')}
                       </div>
-                      {sharePageUrl ? (
+                      <button
+                            type="button"
+                            className="share-menu-item"
+                            role="menuitem"
+                            title={!canCopyShareLink ? shareUnavailableHint : shareLinkStatusHint || undefined}
+                            onClick={() => {
+                              copyLocalShareLink();
+                              // if (!canCopyShareLink || !sharePageUrl) return;
+                              // fireShareExport('share_link', async () => {
+                              //   const ok = await copyShareLink(sharePageUrl);
+                              //   if (!ok) throw new Error('copy_share_link_failed');
+                              // });
+                            }}
+                            style={{color:'#2080F7'}}
+                          >
+                            <span className="share-menu-icon"><RemixIcon name="file-copy-line" size={15} /></span>
+                            <span className="share-menu-text">
+                              <span>复制分享链接</span>
+                              <small></small>
+                              {/* {shareLinkStatusHint ? (
+                                <small>{shareLinkStatusHint}</small>
+                              ) : null} */}
+                            </span>
+                          </button>
+                      {/* {sharePageUrl ? (
                         <>
                           <button
                             type="button"
@@ -11630,46 +11705,40 @@ function HtmlViewer({
                             </span>
                           </button>
                         </>
-                      ) : (
-                        <button
-                          type="button"
-                          className="share-menu-item share-menu-guide"
-                          role="menuitem"
-                          title={shareUnavailableHint}
-                          onClick={() => {
-                            // Share-intent-but-blocked signal: user wants a
-                            // share link but nothing is deployed yet.
-                            trackShareOptionPopoverClick(
-                              analytics.track,
-                              {
-                                page_name: 'artifact',
-                                area: 'share_option_popover',
-                                artifact_id: anonymizeArtifactId({ projectId, fileName: file.name }),
-                                artifact_kind: artifactKindToTracking({ fileKind: file.kind ?? null }),
-                                element: 'publish_required_guide',
-                                project_id: projectId,
-                                project_kind: projectKind,
-                              },
-                              { requestId: analytics.newRequestId() },
-                            );
-                            setShareGuideToast(shareUnavailableHint);
-                          }}
-                        >
-                          <span className="share-menu-icon"><RemixIcon name="link" size={15} /></span>
-                          <span className="share-menu-text">
-                            <span>
-                              {streaming
-                                ? t('fileViewer.shareAfterGenerationComplete')
-                                : t('fileViewer.shareLinkPublishGuide')}
-                            </span>
-                          </span>
-                        </button>
-                      )}
+                      ) : null} */}
                       <div className="share-menu-divider" />
                       <div className="share-menu-section-label" role="presentation">
                         {t('fileViewer.shareMenuPublishOnline')}
                       </div>
-                      {DEPLOY_PROVIDER_OPTIONS.map((option) => (
+                      {/* <button
+                          type="button"
+                          className="share-menu-item"
+                          role="menuitem"
+                          onClick={() => {
+                            void openIuxModal('iux-server');
+                          }}
+                          style={{color:'#2080F7'}}
+                        >
+                          <span className="share-menu-icon">
+                            <RemixIcon name={deployActionIconFor(CLOUDFLARE_PAGES_PROVIDER_ID)} size={15} />
+                          </span>
+                          <span>部署到 IUX Server（仅链接）</span>
+                        </button> */}
+                        <button
+                          type="button"
+                          className="share-menu-item"
+                          role="menuitem"
+                          onClick={() => {
+                            void openIuxModal('iux-marketplace');
+                          }}
+                          style={{color:'#2080F7'}}
+                        >
+                          <span className="share-menu-icon">
+                            <RemixIcon name={deployActionIconFor(CLOUDFLARE_PAGES_PROVIDER_ID)} size={15} />
+                          </span>
+                          <span>发布到 IUX Marketplace</span>
+                        </button>
+                      {/* {DEPLOY_PROVIDER_OPTIONS.map((option) => (
                         <button
                           key={option.id}
                           type="button"
@@ -11688,8 +11757,8 @@ function HtmlViewer({
                           </span>
                           <span>{deployActionLabelFor(option.id)}</span>
                         </button>
-                      ))}
-                      <div className="share-menu-divider" />
+                      ))} */}
+                      {/* <div className="share-menu-divider" />
                       <div className="share-menu-section-label" role="presentation">
                         {t('socialShare.projectSection')}
                       </div>
@@ -11712,7 +11781,7 @@ function HtmlViewer({
                           />
                         </span>
                         <span>{socialShareMenuLabel}</span>
-                      </button>
+                      </button> */}
                     </div>
                   ) : null}
                 </div>
@@ -11733,6 +11802,19 @@ function HtmlViewer({
                   </button>
                   {downloadMenuOpen ? (
                     <div className="share-menu-popover" role="menu">
+                  <button
+                    type="button"
+                    className="share-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setDownloadMenuOpen(false);
+                      triggerHtmlExport();
+                    }}
+                    style={{color:'#2080F7'}}
+                  >
+                    <span className="share-menu-icon"><RemixIcon name="file-code-line" size={15} /></span>
+                    <span>导入到 Pixso</span>
+                  </button>
                   <button
                     type="button"
                     className="share-menu-item"
@@ -12569,6 +12651,53 @@ function HtmlViewer({
             if (event.target === event.currentTarget) closeDeployModal();
           }}
         >
+          {deployPhase.indexOf('iux-')===0?
+          <div className="modal deploy-modal deploy-flow-modal" role="dialog" aria-modal="true">
+            <div className="deploy-flow-modal__scroll">
+              <div className="modal-head">
+                <div className="kicker">{deployModalKicker}</div>
+                <h2>部署到 {deployPhase==='iux-server'?'IUX-Server':'IUX-Marketplace'}</h2>
+                <p className="subtitle">
+                  把HTML文件部署到公司内网平台，方便在线分享预览
+                </p>
+              </div>
+              <div className="deploy-form">
+              <label className="deploy-provider-field">
+                <span className="deploy-field-title">{t('fileViewer.deployProviderLabel')}</span>
+                <select
+                  disabled
+                >
+                    <option value={'ai-builder-web'}>
+                       AI Builder Web
+                    </option>
+                </select>
+              </label>
+              
+              </div>
+            </div>
+            <div className="modal-foot">
+              <button
+                type="button"
+                className="ghost-link button-like"
+                onClick={closeDeployModal}
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="viewer-action primary"
+                disabled={deploying}
+                onClick={() => {
+                  
+                  void deployToIux(deployPhase);
+                  //void deployToSelectedProvider();
+                }}
+              >
+                {deploying?'正在部署':'部署'}
+              </button>
+            </div>
+          </div>
+          :
           <div className="modal deploy-modal deploy-flow-modal" role="dialog" aria-modal="true">
             <div className="deploy-flow-modal__scroll">
               <div className="modal-head">
@@ -12886,6 +13015,7 @@ function HtmlViewer({
               </button>
             </div>
           </div>
+          }
         </div>,
         document.body,
       ) : null}

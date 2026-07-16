@@ -343,6 +343,7 @@ export function HomeView({
   // frame without the heavy `/api/plugins` re-fetch that greyed the rail for
   // 1-2s on every Home remount.
   const [plugins, setPlugins] = useState<InstalledPluginRecord[]>([]);
+  const [iuxPlugins,setIuxPlugins] = useState<InstalledPluginRecord[]>([]);
   const [pluginsLoading, setPluginsLoading] = useState(true);
   const [pendingApplyId, setPendingApplyId] = useState<string | null>(null);
   const [pendingDuplicatePluginId, setPendingDuplicatePluginId] = useState<string | null>(null);
@@ -528,15 +529,18 @@ export function HomeView({
     const load = (force = false) => {
       void (force ? listPlugins() : listPluginsFresh()).then((rows) => {
         if (cancelled) return;
-        // console.log('我通过发请求获取插件数据',rows)
-        setPlugins(rows);
+        console.log('我通过发请求获取插件数据',rows)
         // setPluginsLoading(false);
         listPlugins({
           url:"http://localhost:7001/webapi/v1/od/plugins"
-        }).then((rows)=>{
-          console.log('我通过AI Builder的后台获取的plugins',rows);
+        }).then((rows2)=>{
+          console.log('我通过AI Builder发请求获取插件数据',rows2)
+          setPlugins(rows);
+          setIuxPlugins(rows2)
           setPluginsLoading(false);
+          console.log('iuxPlugins',iuxPlugins);
         }).catch(e=>{
+          setPlugins(rows);
           setPluginsLoading(false);
         })
       });
@@ -2236,6 +2240,7 @@ export function HomeView({
         enabled={!projectsLoading && projects.length === 0}
       >
         <PluginsHomeSection
+          iuxPlugins={iuxPlugins}
           plugins={plugins}
           loading={pluginsLoading}
           activePluginId={active?.record.id ?? null}

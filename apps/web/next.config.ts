@@ -155,7 +155,24 @@ function configuredAllowedDevHosts(): string[] {
   ]));
 }
 
+function getFirstIpv4(): string | null {
+  const interfaces = networkInterfaces();
+  for (const entries of Object.values(interfaces)) {
+    for (const entry of entries ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal) {
+        return entry.address;
+      }
+    }
+  }
+  return null;
+}
+
+const FIRST_IPV4 = getFirstIpv4() ?? '127.0.0.1';
+
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_HTTP_SERVER_URL: `http://${FIRST_IPV4}:9529/`,
+  },
   allowedDevOrigins: configuredAllowedDevHosts(),
   outputFileTracingRoot: WORKSPACE_ROOT,
   reactStrictMode: true,

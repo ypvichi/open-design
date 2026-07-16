@@ -269,11 +269,13 @@ function printRunForegroundResult(started: Partial<Record<ToolDevAppName, unknow
   const daemonStatus = asRecord(asRecord(started.daemon)?.status);
   const webUrl = stringField(webStatus ?? {}, "url");
   const daemonUrl = stringField(daemonStatus ?? {}, "url");
+  const httpServerUrl = stringField(daemonStatus ?? {}, "httpServerUrl");
 
-  if (webUrl != null || daemonUrl != null) {
+  if (webUrl != null || daemonUrl != null || httpServerUrl != null) {
     process.stdout.write("\n  Open Design dev server ready\n\n");
     if (webUrl != null) process.stdout.write(`  ➜  Web:    ${colorizeLink(normalizeDisplayUrl(webUrl))}\n`);
     if (daemonUrl != null) process.stdout.write(`  ➜  Daemon: ${colorizeLink(normalizeDisplayUrl(daemonUrl))}\n`);
+    if (httpServerUrl != null) process.stdout.write(`  ➜  Static:   ${colorizeLink(normalizeDisplayUrl(httpServerUrl))}\n`);
     process.stdout.write("\n  Press Ctrl+C to stop\n\n");
     return;
   }

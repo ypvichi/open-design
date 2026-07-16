@@ -32,6 +32,7 @@ import {
 export type FilterMode = 'all' | 'saved' | 'iux';
 
 interface UsePluginFacetsArgs {
+  iuxPlugins?: InstalledPluginRecord[];
   plugins: InstalledPluginRecord[];
   savedPluginIds?: ReadonlySet<string>;
   preferDefaultFacet?: boolean;
@@ -63,6 +64,7 @@ const EMPTY_SELECTION: FacetSelection = {
 };
 
 export function usePluginFacets({
+  iuxPlugins,
   plugins,
   savedPluginIds,
   preferDefaultFacet = true,
@@ -96,6 +98,14 @@ export function usePluginFacets({
         plugins.filter((p) => p.manifest?.od?.kind !== 'atom'),
       ),
     [plugins],
+  );
+
+  const visibleIuxPlugins = useMemo(
+    () =>
+      sortByVisualAppeal(
+        iuxPlugins||[],
+      ),
+    [iuxPlugins],
   );
 
   // Re-rank for the "newest" order on top of the visual-appeal base:
@@ -137,8 +147,12 @@ export function usePluginFacets({
       mode === 'saved'
         ? savedList
         : applyFacetSelection(orderedPlugins, selection);
+    if(mode === 'iux'){
+      base = visibleIuxPlugins;
+    }
+    // console.log('我有可能拿到',visibleIuxPlugins);
     return filterByQuery(base, query, locale);
-  }, [mode, savedList, orderedPlugins, selection, query, locale]);
+  }, [mode, savedList, orderedPlugins, iuxPlugins, selection, query, locale]);
 
   function pickCategory(slug: string | null): void {
     if (mode !== 'all') setMode('all');
@@ -150,6 +164,7 @@ export function usePluginFacets({
 
   function pickSubcategory(slug: string | null): void {
     if (mode === 'saved') setMode('all');
+    if (mode === 'iux') setMode('all');
     setSelection((prev) => ({
       ...prev,
       subcategory: prev.subcategory === slug ? null : slug,

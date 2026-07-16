@@ -173,6 +173,11 @@ export type DaemonStatusSnapshot = {
    * moment the STATUS request was answered.
    */
   desktopAuthGateActive: boolean;
+  /**
+   * URL of the companion http-server started alongside the daemon
+   * for static file serving (e.g. design previews, build artifacts).
+   */
+  httpServerUrl?: string | null;
 };
 
 export type WebStatusSnapshot = {

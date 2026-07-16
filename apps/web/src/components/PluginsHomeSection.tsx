@@ -37,6 +37,7 @@ const GALLERY_PLUGIN_RENDER_LIMIT = 12;
 const GALLERY_PLUGIN_RENDER_BATCH_SIZE = 12;
 
 interface Props {
+  iuxPlugins?: InstalledPluginRecord[];
   plugins: InstalledPluginRecord[];
   loading: boolean;
   activePluginId: string | null;
@@ -61,6 +62,7 @@ interface Props {
 }
 
 export function PluginsHomeSection({
+  iuxPlugins,
   plugins,
   loading,
   activePluginId,
@@ -105,6 +107,7 @@ export function PluginsHomeSection({
     setSortOrder,
     totalVisible,
   } = usePluginFacets({
+    iuxPlugins,
     plugins,
     savedPluginIds,
     preferDefaultFacet,
@@ -202,11 +205,16 @@ export function PluginsHomeSection({
               // (PluginsView). The minimal Community gallery has no per-card
               // save affordance, so the orthogonal Saved chip is hidden there.
               showSaved={cardLayout === 'rich'}
+              showIux
+              iuxCount={savedList.length}
+              iuxActive={mode === 'iux'}
               savedCount={savedList.length}
               savedActive={mode === 'saved'}
-              savedActive2={mode === 'iux'}
               onToggleSaved={() =>
                 setMode(mode === 'saved' ? 'all' : 'saved')
+              }
+              onToggleIux={() =>
+                setMode(mode === 'iux' ? 'all' : 'iux')
               }
               showAll={categoryAllVisible}
               query={query}
@@ -292,11 +300,14 @@ interface CategoryRowProps {
   onPick: (slug: string | null) => void;
   // The Saved override chip only renders on the rich management surface
   // (PluginsView); the minimal Community gallery hides it.
+  showIux: boolean;
+  iuxCount: number;
+  iuxActive: boolean;
   showSaved: boolean;
   savedCount: number;
   savedActive: boolean;
-  savedActive2: boolean;
   onToggleSaved: () => void;
+  onToggleIux: () => void;
   showAll: boolean;
   query: string;
   onQueryChange: (next: string) => void;
@@ -314,11 +325,14 @@ function CategoryRow({
   selectedSlug,
   totalVisible,
   onPick,
+  showIux,
+  iuxCount,
+  iuxActive,
   showSaved,
   savedCount,
   savedActive,
-  savedActive2,
   onToggleSaved,
+  onToggleIux,
   showAll,
   query,
   onQueryChange,
@@ -337,7 +351,29 @@ function CategoryRow({
         role="tablist"
         aria-label={t('pluginsHome.categoryFilterAria')}
       >
-        {showSaved ? (
+        {showIux ? (
+          <button
+            type="button"
+            className={[
+              'plugins-home__chip',
+              'plugins-home__chip--saved',
+              iuxActive ? 'is-active' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            onClick={onToggleIux}
+            aria-pressed={savedActive}
+            data-testid="plugins-home-chip-saved"
+          >
+            <Icon name="star" size={11} />
+            <span>
+              IUX Marketplace
+              {/* {t('pluginsHome.featured')} */}
+            </span>
+            <span className="plugins-home__chip-count">{iuxCount}</span>
+          </button>
+        ) : null}
+        {!showIux&&showSaved ? (
           <button
             type="button"
             className={[
