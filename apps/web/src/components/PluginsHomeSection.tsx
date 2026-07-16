@@ -367,7 +367,7 @@ function CategoryRow({
           >
             <Icon name="star" size={11} />
             <span>
-              IUX Marketplace
+              IUX Group
               {/* {t('pluginsHome.featured')} */}
             </span>
             <span className="plugins-home__chip-count">{iuxCount}</span>

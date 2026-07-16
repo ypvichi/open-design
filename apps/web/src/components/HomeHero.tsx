@@ -65,6 +65,8 @@ import {
 } from '../utils/inlineMentions';
 import { useI18n, useT } from '../i18n';
 import { localizePluginDescription, localizePluginTitle } from './plugins-home/localization';
+import Lottie from 'lottie-react';
+import animationData from '../../public/lottie/hero-animation.json';
 import {
   examplePresetSeedPrompt,
   pluginPresetQuery,
@@ -1224,10 +1226,16 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
 
   return (
     <section ref={homeHeroRef} className="home-hero" data-testid="home-hero">
+      <Lottie
+        animationData={animationData}
+        loop={true}
+        autoplay={true}
+        style={{ width: 200, height: 150 }}
+      />
       <div className="home-hero__brand" aria-hidden>
         <span className="home-hero__brand-mark od-brand-glyph" />
         <span className="home-hero__brand-name">Open Design</span>
-      </div>
+        </div>
       <h1 className="home-hero__title">{t('homeHero.title')}</h1>
       <p className="home-hero__subtitle">
         {t('homeHero.subtitlePrefix')}

@@ -6179,7 +6179,7 @@ function HtmlViewer({
   }, []);
   const [deployConfig, setDeployConfig] = useState<WebDeployConfigResponse | null>(null);
   const [deploying, setDeploying] = useState(false);
-  const [deployPhase, setDeployPhase] = useState<'idle' | 'deploying' | 'preparing-link' | 'iux-server' | 'iux-marketplace'>('idle');
+  const [deployPhase, setDeployPhase] = useState<'idle' | 'deploying' | 'preparing-link' | 'iux-group'>('idle');
   const [savingDeployConfig, setSavingDeployConfig] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<WebDeployProjectFileResponse | null>(null);
@@ -11781,14 +11781,14 @@ function HtmlViewer({
                           className="share-menu-item"
                           role="menuitem"
                           onClick={() => {
-                            void openIuxModal('iux-marketplace');
+                            void openIuxModal('iux-group');
                           }}
                           style={{color:'#2080F7'}}
                         >
                           <span className="share-menu-icon">
                             <RemixIcon name={deployActionIconFor(CLOUDFLARE_PAGES_PROVIDER_ID)} size={15} />
                           </span>
-                          <span>发布到 IUX Marketplace</span>
+                          <span>发布到 IUX Group</span>
                         </button>
                       {/* {DEPLOY_PROVIDER_OPTIONS.map((option) => (
                         <button
@@ -12708,7 +12708,7 @@ function HtmlViewer({
             <div className="deploy-flow-modal__scroll">
               <div className="modal-head">
                 <div className="kicker">{deployModalKicker}</div>
-                <h2>部署到 {deployPhase==='iux-server'?'IUX-Server':'IUX-Marketplace'}</h2>
+                <h2>部署到 IUX Group</h2>
                 <p className="subtitle">
                   把HTML文件部署到公司内网平台，方便在线分享预览
                 </p>
