@@ -1414,6 +1414,9 @@ describe('FileWorkspace launcher tab creation', () => {
 
     fireEvent.click(screen.getByTestId('emit-browser-snapshot-success'));
     await screen.findByRole('button', { name: 'View Design Files' });
+    const toastAnchor = document.querySelector('.workspace-toast-anchor');
+    expect(toastAnchor).toBeTruthy();
+    expect(toastAnchor?.querySelector('.od-toast-browser-snapshot')).toBeTruthy();
     const toastAction = document.querySelector<HTMLButtonElement>('.od-toast-action');
     if (!toastAction) throw new Error('Could not find browser snapshot toast action');
     await act(async () => {
@@ -1430,6 +1433,47 @@ describe('FileWorkspace launcher tab creation', () => {
     expect(onTabsStateChange).not.toHaveBeenCalledWith(
       expect.objectContaining({ active: 'browser-archive/example/manifest.json' }),
     );
+  });
+
+  it('anchors the browser snapshot toast inside the workspace pane', async () => {
+    // The Download Page progress/result toast is workspace-owned UI. Rendered
+    // as a bare fixed .od-toast it centers on the whole viewport, drifting
+    // over the chat pane and covering the composer send area in split view;
+    // the anchor scopes it to the workspace pane instead.
+    const browserTab = {
+      id: '__browser__:1',
+      insertAfter: '__design_files__',
+      label: 'Browser',
+      title: 'Example',
+      url: 'https://example.com',
+    };
+
+    render(
+      <FileWorkspace
+        projectId="project-1"
+        projectKind="prototype"
+        files={[]}
+        liveArtifacts={[]}
+        onRefreshFiles={vi.fn()}
+        isDeck={false}
+        tabsState={{
+          tabs: [],
+          active: '__browser__:1',
+          browserTabs: [browserTab],
+        }}
+        onTabsStateChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('emit-browser-snapshot-success'));
+
+    const toast = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.od-toast');
+      expect(node?.textContent).toContain('Saved page snapshot');
+      return node as HTMLElement;
+    });
+    expect(toast.closest('.workspace-toast-anchor')).toBeTruthy();
+    expect(toast.closest('[data-testid="file-workspace"]')).toBeTruthy();
   });
 
   it('anchors a new browser after the visible tab tail', async () => {
@@ -3108,4 +3152,105 @@ describe('FileWorkspace empty-project generation contract', () => {
       expect(screen.getByTestId('design-files-empty')).toBeTruthy();
     },
   );
+
+  it('keeps delivery recovery in Chat and leaves a passive failure hint over existing preview files', () => {
+    render(
+      <FileWorkspace
+        projectId="project-1"
+        projectKind="prototype"
+        files={[workspaceFile('previous-design.html')]}
+        liveArtifacts={[]}
+        onRefreshFiles={vi.fn()}
+        isDeck={false}
+        tabsState={{ tabs: [], active: DESIGN_FILES_TAB }}
+        onTabsStateChange={vi.fn()}
+        messages={[
+          {
+            ...assistantMessage('failed'),
+            id: 'delivery-failure',
+            runStatus: 'succeeded',
+            resultDeliveryState: 'no_result',
+            sessionMode: 'design',
+            endedAt: 1_700_000_012_000,
+          },
+        ]}
+      />,
+    );
+
+    const previewStatus = screen.getByTestId('preview-run-status');
+    expect(previewStatus).toHaveTextContent('Delivery needs attention · Retry in Chat');
+    expect(previewStatus.closest('.ws-preview-run-status-slot')).not.toBeNull();
+    expect(previewStatus.closest('[data-testid="design-files-empty"]')).toBeNull();
+    expect(screen.queryByTestId('preview-run-status-retry')).toBeNull();
+    expect(screen.queryByTestId('preview-run-status-view-details')).toBeNull();
+    expect(previewStatus).not.toHaveTextContent('Elapsed');
+  });
+
+  it('does not mount main-preview delivery feedback over a browser tab', () => {
+    render(
+      <FileWorkspace
+        projectId="project-1"
+        projectKind="prototype"
+        files={[workspaceFile('previous-design.html')]}
+        liveArtifacts={[]}
+        onRefreshFiles={vi.fn()}
+        isDeck={false}
+        tabsState={{
+          tabs: ['previous-design.html'],
+          active: '__browser__:1',
+          browserTabs: [{ id: '__browser__:1', label: 'Browser', url: 'https://example.com' }],
+        }}
+        onTabsStateChange={vi.fn()}
+        messages={[
+          {
+            ...assistantMessage('failed'),
+            id: 'browser-delivery-failure',
+            runStatus: 'succeeded',
+            resultDeliveryState: 'delivery_failed',
+            sessionMode: 'design',
+            endedAt: 1_700_000_012_000,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId('design-browser-panel')).toBeTruthy();
+    expect(screen.queryByTestId('preview-run-status')).toBeNull();
+  });
+
+  it('keeps a delivered confirmation on the preview canvas after files arrive', () => {
+    const now = 1_700_000_012_500;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    render(
+      <FileWorkspace
+        projectId="project-1"
+        projectKind="prototype"
+        files={[workspaceFile('delivered-design.html')]}
+        liveArtifacts={[]}
+        onRefreshFiles={vi.fn()}
+        isDeck={false}
+        tabsState={{ tabs: ['delivered-design.html'], active: 'delivered-design.html' }}
+        onTabsStateChange={vi.fn()}
+        messages={[
+          {
+            ...assistantMessage('failed'),
+            id: 'delivery-succeeded',
+            runStatus: 'succeeded',
+            resultDeliveryState: 'delivered',
+            sessionMode: 'design',
+            startedAt: now - 4_000,
+            endedAt: now - 1_000,
+          },
+        ]}
+      />,
+    );
+
+    const previewStatus = screen.getByTestId('preview-run-status');
+    expect(previewStatus).toHaveTextContent('Design ready');
+    expect(previewStatus.closest('.ws-preview-run-status-slot')).not.toBeNull();
+    expect(previewStatus.closest('[data-testid="design-files-empty"]')).toBeNull();
+    expect(previewStatus).not.toHaveAttribute('aria-live');
+    expect(within(previewStatus).getByRole('status')).toHaveTextContent('Design ready');
+    expect(previewStatus.querySelector('[aria-hidden="true"]')).toHaveTextContent('Elapsed 0:03');
+  });
 });

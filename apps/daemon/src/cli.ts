@@ -63,6 +63,7 @@ const MEDIA_GENERATE_STRING_FLAGS = new Set([
   'surface',
   'model',
   'prompt',
+  'prompt-file',
   'output',
   'aspect',
   'length',
@@ -521,6 +522,11 @@ if (argv[0] === 'tools' && argv[1] === 'live-artifacts') {
       process.stderr.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
       process.exitCode = 1;
     });
+} else if (argv[0] === 'tools' && argv[1] === 'directions') {
+  // Agent-facing pull layer for the direction library: the slim prompt
+  // carries only an id+label index and the agent fetches the chosen
+  // direction's full spec (palette, font stacks, posture) here.
+  runDirectionsToolCli(argv.slice(2));
 } else if (argv[0] === 'tools' && argv[1] === 'design-systems') {
   runDesignSystemsToolCli(argv.slice(2))
     .then(({ exitCode }) => {
@@ -535,6 +541,70 @@ if (argv[0] === 'tools' && argv[1] === 'live-artifacts') {
   await runDaemonCliStartup(argv, { printHelp: printRootHelp });
 }
 
+async function runDirectionsToolCli(args) {
+  const { DESIGN_DIRECTIONS, formatDirectionSpecText } = await import(
+    './prompts/directions.js'
+  );
+  const wantJson = args.includes('--json');
+  // Agents call this command straight from the prompt contract, so malformed
+  // invocations must fail fast instead of falling through to the full list
+  // or swallowing the next flag as the value.
+  const readFlagValue = (flag: string): string | null => {
+    const idx = args.indexOf(flag);
+    if (idx === -1) return null;
+    if (args.indexOf(flag, idx + 1) !== -1) {
+      console.error(`duplicate ${flag} flag`);
+      process.exit(1);
+    }
+    const value = args[idx + 1];
+    if (value === undefined || value.startsWith('--')) {
+      console.error(`missing value for ${flag}`);
+      process.exit(1);
+    }
+    return value;
+  };
+  const idValue = readFlagValue('--id');
+  const labelValue = readFlagValue('--label');
+  if (idValue !== null && labelValue !== null) {
+    console.error('pass either --id or --label, not both');
+    process.exit(1);
+  }
+  const needle = idValue ?? labelValue;
+  if (needle) {
+    if (wantJson) {
+      const match = DESIGN_DIRECTIONS.find(
+        (d) =>
+          d.id.toLowerCase() === String(needle).trim().toLowerCase() ||
+          d.label.toLowerCase() === String(needle).trim().toLowerCase(),
+      );
+      if (!match) {
+        console.error(`unknown direction: ${needle}`);
+        process.exit(1);
+      }
+      process.stdout.write(JSON.stringify(match) + '\n');
+      return;
+    }
+    const spec = formatDirectionSpecText(String(needle));
+    if (!spec) {
+      console.error(
+        `unknown direction: ${needle}\nRun \`od tools directions\` to list ids.`,
+      );
+      process.exit(1);
+    }
+    process.stdout.write(spec + '\n');
+    return;
+  }
+  if (wantJson) {
+    process.stdout.write(
+      JSON.stringify(DESIGN_DIRECTIONS.map(({ id, label }) => ({ id, label }))) + '\n',
+    );
+    return;
+  }
+  for (const d of DESIGN_DIRECTIONS) {
+    console.log(`${d.id}\t${d.label}`);
+  }
+}
+
 function printRootHelp() {
   console.log(`Usage:
   od [--port <n>] [--host <addr>] [--no-open]
@@ -542,6 +612,10 @@ function printRootHelp() {
 
   od tools live-artifacts <create|list|update|refresh> [options]
       Manage live artifacts through daemon wrapper commands.
+
+  od tools directions [--id <id> | --label <label>] [--json]
+      List the built-in design directions, or print one direction's full
+      palette / font stacks / posture spec for binding into :root.
 
   od artifacts create --name <path> --input <file> [--project <id-or-name>]
       Create a normal project artifact through the local daemon.
@@ -828,10 +902,16 @@ async function runMediaGenerate(rawArgs) {
     process.exit(2);
   }
 
+  // Long-form media prompts (detailed image/video descriptions, program-
+  // generated prompts) arrive via --prompt-file <path|-> (stdin) per the CLI
+  // contract; readPromptFromFlags prefers an inline --prompt and otherwise reads
+  // the file/stdin, matching od run / od brand / od automation.
+  const prompt = await readPromptFromFlags(flags);
+
   const body = {
     surface,
     model: flags.model,
-    prompt: flags.prompt,
+    prompt,
     output: flags.output,
     aspect: flags.aspect,
     voice: flags.voice,
@@ -1122,6 +1202,7 @@ Required:
 
 Common options:
   --prompt "<text>"         Generation prompt. ElevenLabs SFX prompts must stay under 450 characters.
+  --prompt-file <path|->     Read the prompt from a file, or - for stdin (for long-form prompts).
   --output <filename>       File to write under the project. Auto-named if omitted.
   --aspect 1:1|16:9|9:16|4:3|3:4
   --length <seconds>        Video length.
@@ -1143,6 +1224,27 @@ Common options:
   --daemon-url <url>
 
 Output: a single line of JSON: {"file": { name, size, kind, mime, ... }}
+  Slow models return {"taskId": "...", "nextSince": n} with exit 0 instead —
+  a successful queued handoff, not a failure. Poll with \`media wait\`:
+  exit 0 = done ({"file": ...} on stdout), exit 2 = still running (re-run
+  the wait command stderr prints, carrying forward nextSince), 5 = failed.
+
+Worked generate→wait loop (POSIX bash — do NOT translate to PowerShell;
+parse JSON with python3, not jq):
+
+  out=\$("\$OD_NODE_BIN" "\$OD_BIN" media generate --project "\$OD_PROJECT_ID" \\
+    --surface image --model flux-pro-ultra --prompt "..." --aspect 16:9)
+  last=\$(printf '%s\\n' "\$out" | tail -1)
+  task_id=\$(printf '%s\\n' "\$last" | python3 -c "import sys,json; print(json.load(sys.stdin).get('taskId',''))" 2>/dev/null)
+  since=\$(printf '%s\\n' "\$last" | python3 -c "import sys,json; print(json.load(sys.stdin).get('nextSince',0))" 2>/dev/null)
+  while [ -n "\$task_id" ]; do
+    out=\$("\$OD_NODE_BIN" "\$OD_BIN" media wait "\$task_id" --since "\${since:-0}")
+    ec=\$?
+    last=\$(printf '%s\\n' "\$out" | tail -1)
+    since=\$(printf '%s\\n' "\$last" | python3 -c "import sys,json; print(json.load(sys.stdin).get('nextSince',0))" 2>/dev/null)
+    if [ "\$ec" -eq 0 ]; then task_id=""; elif [ "\$ec" -ne 2 ]; then echo "\$out" >&2; exit "\$ec"; fi
+  done
+  printf '%s\\n' "\$last"
 
 Skills should call this and then reference the returned filename in their
 artifact / message body. The daemon writes the bytes into the project's
