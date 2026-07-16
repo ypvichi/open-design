@@ -26,7 +26,7 @@ import {
 } from "@open-design/sidecar";
 
 import { startDaemonRuntime, type StartedDaemonRuntime } from "../daemon-startup.js";
-import { startHttpServerRuntime } from "../http-server-startup.js";
+import { startHttpServerRuntime, getLocalIPv4Address } from "../http-server-startup.js";
 import {
   getDesktopAuthSecret,
   isDesktopAuthGateActive,
@@ -165,7 +165,7 @@ export async function startDaemonSidecar(runtime: SidecarRuntimeContext<SidecarS
 
   // Start companion http-server for static file serving alongside the daemon.
   const httpServer = await startHttpServerRuntime({
-    host: "0.0.0.0",
+    host: getLocalIPv4Address(),
     port: 9529,
     directory: path.join(process.env.OD_DATA_DIR || process.cwd(), '.od/projects'),
   });

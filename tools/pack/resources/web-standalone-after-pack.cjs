@@ -405,7 +405,16 @@ async function dedupeCopiedStandaloneNext(destinationRoot, destinationWebRoot, p
   const removedPaths = [];
 
   if (!(await pathExists(path.join(webNextRoot, "package.json")))) {
-    throw new Error(`[tools-pack web-standalone] copied standalone app-local Next package missing: ${webNextRoot}`);
+    // Next.js 16 standalone output may not include an app-local next package.
+    // Copy the root next package into the web node_modules so the standalone
+    // server can resolve it locally, then remove the duplicate at the root.
+    if (await pathExists(path.join(rootNextRoot, "package.json"))) {
+      await copyRequired(rootNextRoot, webNextRoot, { dereference: true });
+    } else if (await pathExists(path.join(pnpmHoistedNextRoot, "package.json"))) {
+      await copyRequired(pnpmHoistedNextRoot, webNextRoot, { dereference: true });
+    } else {
+      throw new Error(`[tools-pack web-standalone] copied standalone app-local Next package missing: ${webNextRoot}`);
+    }
   }
 
   await removePathAndRecord(

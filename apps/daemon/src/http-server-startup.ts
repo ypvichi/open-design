@@ -1,6 +1,6 @@
 import { spawn, execSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { platform } from 'node:os';
+import { platform, networkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
 
 /**
@@ -33,6 +33,21 @@ export type HttpServerCliStartupParseResult =
 
 export const DEFAULT_HTTP_SERVER_PORT = 8080;
 export const DEFAULT_HTTP_SERVER_BIND_HOST = '0.0.0.0';
+
+/** 获取本机第一个非内部 IPv4 地址 */
+export function getLocalIPv4Address(): string {
+  const interfaces = networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    const iface = interfaces[name];
+    if (!iface) continue;
+    for (const entry of iface) {
+      if (entry.family === 'IPv4' && !entry.internal) {
+        return entry.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+}
 
 function requiredOptionValue(flag: string, value: string | undefined, label: string): string | HttpServerCliStartupParseResult {
   if (value == null || value.startsWith('-')) {
