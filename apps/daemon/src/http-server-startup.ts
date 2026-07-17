@@ -227,6 +227,77 @@ function buildExpectedUrl(host: string, port: number | string): string {
   return `http://${host}:${port}`;
 }
 
+/** 查找占用指定端口的进程 PID（返回第一个匹配的 PID，找不到返回 null） */
+function findProcessByPort(port: number): number | null {
+  if (platform() === 'win32') {
+    try {
+      const output = execSync(
+        `netstat -ano | findstr :${port}`,
+        { encoding: 'utf-8', shell: 'cmd.exe' }
+      );
+      // 典型行:  TCP    0.0.0.0:8080           0.0.0.0:0              LISTENING       12345
+      for (const line of output.split('\n')) {
+        const parts = line.trim().split(/\s+/);
+        const last = parts[parts.length - 1];
+        if (last == null) continue;
+        const pid = parseInt(last, 10);
+        if (!isNaN(pid) && pid > 0) {
+          return pid;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  // Unix (Linux/macOS)
+  try {
+    // lsof -t 只输出 PID
+    const output = execSync(`lsof -t -i :${port}`, { encoding: 'utf-8' });
+    const firstLine = output.trim().split('\n')[0];
+    if (firstLine == null) return null;
+    const pid = parseInt(firstLine, 10);
+    if (!isNaN(pid) && pid > 0) {
+      return pid;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+/** 终止占用指定端口的进程 */
+function killProcessByPort(port: number): void {
+  const pid = findProcessByPort(port);
+  if (pid == null) {
+    return;
+  }
+
+  console.log(`[http-server] port ${port} is occupied by PID ${pid}, terminating...`);
+
+  if (platform() === 'win32') {
+    try {
+      execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' });
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  // Unix: 先尝试优雅终止，再强制终止
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // ignore
+    }
+  }
+}
+
 /**
  * 启动 http-server 静态文件服务。
  * 子进程使用 detached: false 绑定到父进程，确保父进程退出时子进程也被清理。
@@ -234,6 +305,13 @@ function buildExpectedUrl(host: string, port: number | string): string {
 export async function startHttpServerRuntime(options: { host: string; port: number; directory: string }): Promise<StartedHttpServerRuntime> {
   const { host, port, directory } = options;
   const absoluteDir = resolve(directory);
+
+  // 启动前：若端口非 0，先尝试清理占用该端口的进程
+  if (port !== 0) {
+    killProcessByPort(port);
+    // 短暂等待，确保端口释放
+    await new Promise(r => setTimeout(r, 300));
+  }
 
   // 构建 http-server 参数
   const args = ['-y', 'http-server', absoluteDir, '-p', String(port), '-a', host];
@@ -339,28 +417,4 @@ function setupShutdownHandlers(runtime: StartedHttpServerRuntime): void {
     console.error('Uncaught exception:', error);
     stop();
   });
-}
-
-export async function runHttpServerCliStartup(argv: string[], options: { printHelp?: () => void } = {}): Promise<void> {
-  const parsed = parseHttpServerCliStartupArgs(argv);
-  if (!parsed.ok) {
-    if (parsed.kind === 'error') {
-      console.error(parsed.message);
-      options.printHelp?.();
-      process.exit(2);
-    }
-    options.printHelp?.();
-    return;
-  }
-  const { host, port, directory } = parsed.config;
-
-  const runtime = await startHttpServerRuntime({
-    host,
-    port,
-    directory,
-  });
-
-  console.log(`[http-server] serving ${directory} at ${runtime.url}`);
-
-  setupShutdownHandlers(runtime);
 }
