@@ -167,7 +167,7 @@ export async function startDaemonSidecar(runtime: SidecarRuntimeContext<SidecarS
   const httpServer = await startHttpServerRuntime({
     host: getLocalIPv4Address(),
     port: 9529,
-    directory: path.join(process.env.OD_DATA_DIR || process.cwd(), '.od/projects'),
+    directory: path.join(process.env.OD_DATA_DIR || path.join(process.cwd(), '.od'), 'projects'),
   });
 
   // PR #974 round 6 (mrcfps): tools-dev's split-start hardening reads

@@ -9704,6 +9704,7 @@ function HtmlViewer({
     document.body.removeChild(input);
   }
   async function copyLocalShareLink(){
+    setDeployMenuOpen(false);
     let fileData = file as any;
     const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
     const fileName = fileData.name;
@@ -11914,7 +11915,7 @@ function HtmlViewer({
                     style={{color:'#2080F7'}}
                   >
                     <span className="share-menu-icon"><RemixIcon name="file-code-line" size={15} /></span>
-                    <span>导入到 Pixso ( 智能拆分 )</span>
+                    <span>导入到 Pixso ( 智能拆分)</span>
                   </button>
                   <button
                     type="button"

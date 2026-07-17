@@ -1,86 +1,152 @@
-import { spawn, execSync } from 'node:child_process';
-import type { ChildProcess } from 'node:child_process';
-import { platform, networkInterfaces } from 'node:os';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { execSync } from 'node:child_process';
+import { networkInterfaces, platform } from 'node:os';
+import { resolve, extname, join } from 'node:path';
+import http from 'node:http';
+import fs from 'node:fs';
+import { WebSocketServer } from 'ws';
 
 /**
  * http-server-startup.ts
  *
- * 参考 daemon-startup.ts 的模式，用于启动 http-server 静态文件服务。
- * 典型用法：npx -y http-server <directory> -p 0
- *
- * 当 port 为 0 时，http-server 会自动分配一个随机端口，
- * 我们从 stdout 中解析实际的 URL。
+ * 内联实现静态文件 HTTP 服务，不依赖外部 http-server 包。
+ * 同时内联实现 WebSocket 服务（默认端口 9528），使用 ws 包。
  */
+
+// ==================== WebSocket 服务 ====================
+
+const WS_DEFAULT_PORT = 9528;
+const HEARTBEAT_INTERVAL_MS = 30000;
+
+function formatRemoteIp(addr: string | undefined): string {
+  if (!addr) return 'unknown';
+  return addr.startsWith('::ffff:') ? addr.slice(7) : addr;
+}
+
+function logListen(port: number) {
+  console.log(`[ws-server] listening on ws://0.0.0.0:${port}`);
+}
+
+function broadcastHeartbeat(wss: WebSocketServer) {
+  const payload = JSON.stringify({ type: 'heartbeat', t: Date.now() });
+  for (const client of wss.clients) {
+    if (client.readyState === 1) {
+      client.send(payload);
+    }
+  }
+}
+
+function bindHandlers(wss: WebSocketServer) {
+  wss.on('connection', (ws, req) => {
+    const ip = formatRemoteIp(req.socket.remoteAddress);
+    console.log(`[ws-server] client connected: ${ip} (total: ${wss.clients.size})`);
+
+    ws.on('message', (data, isBinary) => {
+      const payload = isBinary ? data : data.toString();
+      for (const client of wss.clients) {
+        if (client.readyState === 1) {
+          client.send(payload, { binary: isBinary });
+        }
+      }
+    });
+
+    ws.on('close', () => {
+      console.log(`[ws-server] client disconnected: ${ip} (total: ${wss.clients.size})`);
+    });
+  });
+}
+
+class InlineWsServer {
+  private wss: WebSocketServer | null = null;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private port: number;
+
+  constructor(port: number = WS_DEFAULT_PORT) {
+    this.port = port;
+  }
+
+  start(): void {
+    this.wss = new WebSocketServer({ port: this.port, host: '0.0.0.0' });
+    bindHandlers(this.wss);
+    this.wss.on('listening', () => {
+      logListen(this.port);
+      if (HEARTBEAT_INTERVAL_MS > 0) {
+        broadcastHeartbeat(this.wss!);
+        this.heartbeatTimer = setInterval(() => broadcastHeartbeat(this.wss!), HEARTBEAT_INTERVAL_MS);
+      }
+    });
+  }
+
+  async stop(): Promise<void> {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    return new Promise((resolve) => {
+      if (this.wss) {
+        this.wss.close(() => resolve());
+      } else {
+        resolve();
+      }
+    });
+  }
+}
+
+// ==================== HTTP 静态文件服务 ====================
 
 type StartedServer = {
   url: string;
   stop(): Promise<void>;
 };
 
-/** 启动 ws-server.mjs 子进程 */
-function startWsServer(): ChildProcess {
-  // 注意：编译后 __dirname 指向 dist/，所以到 bin/ 只需 ../
-  const wsScriptPath = resolve(__dirname, '../bin/ws-server.mjs');
-  console.log('[ws-server] starting...', wsScriptPath);
-  const wsChild = spawn(process.execPath, [wsScriptPath], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false,
-    windowsHide: true,
-    cwd: process.cwd(),
-  });
+// MIME 类型映射
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html',
+  '.js': 'application/javascript',
+  '.mjs': 'application/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.eot': 'application/vnd.ms-fontobject',
+  '.otf': 'font/otf',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+  '.txt': 'text/plain',
+  '.xml': 'application/xml',
+  '.webp': 'image/webp',
+};
 
-  wsChild.stdout?.on('data', (data: Buffer) => {
-    const text = data.toString().trim();
-    if (text) console.log(`[ws-server] ${text}`);
-  });
-
-  wsChild.stderr?.on('data', (data: Buffer) => {
-    const text = data.toString().trim();
-    if (text) console.error(`[ws-server] ${text}`);
-  });
-
-  wsChild.on('error', (error) => {
-    console.error('[ws-server] spawn error:', error.message);
-  });
-
-  return wsChild;
+/** 根据文件扩展名获取 MIME 类型 */
+function getMimeType(filePath: string): string {
+  const ext = extname(filePath).toLowerCase();
+  return MIME_TYPES[ext] || 'application/octet-stream';
 }
 
-/** 关闭 ws-server.mjs（通过 -command close） */
-async function stopWsServer(): Promise<void> {
-  // 注意：编译后 __dirname 指向 dist/，所以到 bin/ 只需 ../
-  const wsScriptPath = resolve(__dirname, '../bin/ws-server.mjs');
-  return new Promise((resolveClose) => {
-    const closeChild = spawn(process.execPath, [wsScriptPath, '-command', 'close'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,
-      windowsHide: true,
-      cwd: process.cwd(),
-    });
+/** 安全地解析请求路径，防止目录遍历 */
+function safeResolvePath(rootDir: string, urlPath: string): string {
+  const decoded = decodeURIComponent(urlPath);
+  const normalized = decoded.replace(/^\/+/, '').replace(/\\/g, '/');
+  const safe = join(rootDir, normalized);
 
-    let stdout = '';
-    closeChild.stdout?.on('data', (data: Buffer) => {
-      stdout += data.toString();
-    });
+  const resolvedRoot = resolve(rootDir);
+  const resolvedSafe = resolve(safe);
 
-    closeChild.on('close', () => {
-      if (stdout.includes('graceful shutdown signal sent')) {
-        // 等待 ws-server 进程退出
-        setTimeout(() => resolveClose(), 500);
-      } else {
-        resolveClose();
-      }
-    });
+  if (!resolvedSafe.startsWith(resolvedRoot)) {
+    return join(rootDir, 'index.html');
+  }
 
-    closeChild.on('error', () => resolveClose());
-
-    // 兜底：5秒后强制 resolve
-    setTimeout(() => resolveClose(), 5000);
-  });
+  return safe;
 }
 
 export type StartedHttpServerRuntime = StartedServer;
@@ -157,150 +223,6 @@ export function parseHttpServerCliStartupArgs(argv: string[]): HttpServerCliStar
   return { ok: true, config: { host, port, directory } };
 }
 
-/** 获取指定进程的所有直接子进程 PID */
-function getChildPids(parentPid: number): number[] {
-  if (platform() === 'win32') {
-    try {
-      const output = execSync(
-        `wmic process where (ParentProcessId=${parentPid}) get ProcessId`,
-        { encoding: 'utf-8' }
-      );
-      return output
-        .split('\n')
-        .map(s => parseInt(s.trim(), 10))
-        .filter(n => !isNaN(n) && n !== 0);
-    } catch {
-      return [];
-    }
-  }
-
-  try {
-    const output = execSync(`ps -o pid= --ppid ${parentPid}`, { encoding: 'utf-8' });
-    return output
-      .trim()
-      .split('\n')
-      .map(s => parseInt(s.trim(), 10))
-      .filter(n => !isNaN(n));
-  } catch {
-    return [];
-  }
-}
-
-/** 递归收集进程树中所有后代 PID */
-function collectProcessTree(pid: number): Set<number> {
-  const all = new Set<number>();
-  const collect = (p: number) => {
-    for (const child of getChildPids(p)) {
-      if (!all.has(child)) {
-        all.add(child);
-        collect(child);
-      }
-    }
-  };
-  collect(pid);
-  return all;
-}
-
-/** 强制终止整个进程树 */
-function killProcessTree(pid: number): void {
-  if (platform() === 'win32') {
-    try {
-      execSync(`taskkill /T /F /PID ${pid}`, { stdio: 'ignore' });
-    } catch {
-      // ignore
-    }
-    return;
-  }
-
-  // Unix: 先杀子进程，再杀父进程
-  const toKill = collectProcessTree(pid);
-  toKill.add(pid);
-
-  for (const p of toKill) {
-    try {
-      process.kill(p, 'SIGKILL');
-    } catch {
-      // ignore
-    }
-  }
-}
-
-/** 优雅地停止 http-server 子进程 */
-export async function stopHttpServer(child: ChildProcess, wsChild?: ChildProcess, { closeTimeoutMs = 5_000 } = {}): Promise<void> {
-  if (child.killed || child.exitCode !== null) {
-    return;
-  }
-
-  return new Promise<void>((resolveClose, rejectClose) => {
-    let resolved = false;
-
-    const resolveOnce = () => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(hardTimer);
-      resolveClose();
-    };
-
-    const rejectOnce = (error: Error) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(hardTimer);
-      rejectClose(error);
-    };
-
-    const hardTimer = setTimeout(() => {
-      if (child.pid != null) {
-        killProcessTree(child.pid);
-      }
-      resolveOnce();
-    }, closeTimeoutMs);
-
-    if (hardTimer.unref) {
-      hardTimer.unref();
-    }
-
-    child.on('close', () => resolveOnce());
-    child.on('error', (error) => rejectOnce(error));
-
-    // 先尝试优雅关闭，超时后 killProcessTree 兜底
-    child.kill('SIGTERM');
-  }).finally(async () => {
-    // 同时关闭 ws-server
-    if (wsChild) {
-      try {
-        await stopWsServer();
-      } catch {
-        // ignore
-      }
-    }
-  });
-}
-
-/**
- * 从 http-server 的 stdout 中解析 URL。
- * http-server 的典型输出格式：
- *   Available on:
- *     http://127.0.0.1:8080
- */
-function parseHttpServerUrl(stdout: string): string | null {
-  // 匹配 "Available on:" 后面的 URL
-  const match = stdout.match(/Available on:[\s\S]*?(https?:\/\/[^\s]+)/);
-  if (match?.[1]) {
-    return match[1];
-  }
-  // 备选：直接匹配任何 http:// 或 https:// URL
-  const fallbackMatch = stdout.match(/(https?:\/\/[^\s]+)/);
-  if (fallbackMatch?.[1]) {
-    return fallbackMatch[1];
-  }
-  return null;
-}
-
-/** 根据配置构建预期的 URL */
-function buildExpectedUrl(host: string, port: number | string): string {
-  return `http://${host}:${port}`;
-}
-
 /** 查找占用指定端口的进程 PID（返回第一个匹配的 PID，找不到返回 null） */
 function findProcessByPort(port: number): number | null {
   if (platform() === 'win32') {
@@ -372,98 +294,143 @@ function killProcessByPort(port: number): void {
   }
 }
 
+/** 创建静态文件 HTTP 服务器 */
+function createStaticFileServer(rootDir: string): http.Server {
+  return http.createServer((req, res) => {
+    const urlPath = req.url || '/';
+
+    let filePath: string;
+    try {
+      filePath = safeResolvePath(rootDir, urlPath);
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Bad Request');
+      return;
+    }
+
+    fs.stat(filePath, (err, stats) => {
+      if (err) {
+        if (err.code === 'ENOENT') {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Not Found：'+filePath);
+        } else {
+          res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Internal Server Error');
+        }
+        return;
+      }
+
+      if (stats.isDirectory()) {
+        // 目录：尝试返回 index.html
+        const indexPath = join(filePath, 'index.html');
+        fs.readFile(indexPath, (err, data) => {
+          if (err) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(`<!DOCTYPE html><html><head><title>Index</title></head><body><h1>Index of ${urlPath}</h1></body></html>`);
+          } else {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(data);
+          }
+        });
+      } else {
+        // 文件：流式读取并返回
+        const mimeType = getMimeType(filePath);
+        res.writeHead(200, {
+          'Content-Type': mimeType,
+          'Content-Length': stats.size.toString(),
+        });
+        const stream = fs.createReadStream(filePath);
+        stream.pipe(res);
+        stream.on('error', () => {
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end();
+          }
+        });
+      }
+    });
+  });
+}
+
+/** 优雅地停止 http-server */
+export async function stopHttpServer(server: http.Server, wsServer?: InlineWsServer, { closeTimeoutMs = 5_000 } = {}): Promise<void> {
+  return new Promise<void>((resolveClose) => {
+    const timer = setTimeout(() => {
+      resolveClose();
+    }, closeTimeoutMs);
+
+    server.close(() => {
+      clearTimeout(timer);
+      resolveClose();
+    });
+  }).finally(async () => {
+    if (wsServer) {
+      try {
+        await wsServer.stop();
+      } catch {
+        // ignore
+      }
+    }
+  });
+}
+
 /**
- * 启动 http-server 静态文件服务，同时启动 ws-server.mjs WebSocket 服务。
- * 子进程使用 detached: false 绑定到父进程，确保父进程退出时子进程也被清理。
+ * 启动内联 HTTP 静态文件服务，同时启动内联 WebSocket 服务（默认端口 9528）。
+ * 启动前会先清理占用目标端口的进程。
  */
 export async function startHttpServerRuntime(options: { host: string; port: number; directory: string }): Promise<StartedHttpServerRuntime> {
   const { host, port, directory } = options;
   const absoluteDir = resolve(directory);
 
-  // 启动前：若端口非 0，先尝试清理占用该端口的进程
+  // 启动前：先尝试清理占用该端口的进程
   if (port !== 0) {
     killProcessByPort(port);
     // 短暂等待，确保端口释放
     await new Promise(r => setTimeout(r, 300));
   }
 
-  // 构建 http-server 参数
-  const args = ['-y', 'http-server', absoluteDir, '-p', String(port), '-a', host];
+  const server = createStaticFileServer(absoluteDir);
 
-  // 在 Windows 上使用 npx.cmd，其他平台用 npx
-  const isWindows = platform() === 'win32';
-  const command = isWindows ? 'npx.cmd' : 'npx';
+  // 启动内联 WebSocket 服务器
+  const wsServer = new InlineWsServer();
+  wsServer.start();
 
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,        // 绑定到父进程，随父进程退出
-      shell: isWindows,       // Windows 上需要 shell 来执行 .cmd 文件
-      windowsHide: true,     // Windows 下隐藏控制台窗口
-      cwd: process.cwd(),
-    });
-
-    // 同时启动 ws-server
-    const wsChild = startWsServer();
-
-    let stdout = '';
-    let stderr = '';
     let resolved = false;
-    let urlResolved = false;
 
-    const resolveOnce = (url: string) => {
+    const httpServer = server.listen(port, host, () => {
       if (resolved) return;
+
+      const address = httpServer.address();
+      const actualPort = typeof address === 'string' ? port : (address?.port ?? port);
+      const url = `http://${host === '0.0.0.0' ? getLocalIPv4Address() : host}:${actualPort}`;
+
+      console.log(`[http-server] serving ${absoluteDir} at ${url}`);
+
       resolved = true;
-      urlResolved = true;
       resolve({
         url,
-        stop: () => stopHttpServer(child, wsChild),
+        stop: () => stopHttpServer(server, wsServer),
       });
-    };
+    });
 
-    const rejectOnce = (error: Error) => {
+    httpServer.on('error', (error) => {
       if (resolved) return;
       resolved = true;
-      reject(error);
-    };
-
-    child.stdout?.on('data', (data: Buffer) => {
-      const text = data.toString();
-      stdout += text;
-
-      if (!urlResolved) {
-        const url = parseHttpServerUrl(stdout);
-        if (url) {
-          resolveOnce(url);
-        }
-      }
+      reject(new Error(`Failed to start http-server: ${error.message}`));
     });
 
-    child.stderr?.on('data', (data: Buffer) => {
-      stderr += data.toString();
-    });
-
-    child.on('error', (error) => {
-      rejectOnce(new Error(`Failed to start http-server: ${error.message}`));
-    });
-
-    child.on('close', (code) => {
+    // Fallback: 如果 5 秒内没有启动成功，使用预期 URL
+    setTimeout(() => {
       if (!resolved) {
-        rejectOnce(new Error(`http-server exited with code ${code}: ${stderr || stdout}`));
-      }
-    });
-
-    // Fallback: 如果 5 秒内没有从 stdout 解析到 URL，使用预期 URL
-    const fallbackTimer = setTimeout(() => {
-      if (!resolved) {
-        const expectedUrl = port === 0 ? buildExpectedUrl(host, '<random>') : buildExpectedUrl(host, port);
-        resolveOnce(expectedUrl);
+        const fallbackUrl = `http://${host === '0.0.0.0' ? getLocalIPv4Address() : host}:${port}`;
+        resolved = true;
+        resolve({
+          url: fallbackUrl,
+          stop: () => stopHttpServer(server, wsServer),
+        });
       }
     }, 5_000);
-
-    if (fallbackTimer.unref) {
-      fallbackTimer.unref();
-    }
   });
 }
 
