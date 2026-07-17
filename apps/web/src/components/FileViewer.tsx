@@ -10199,6 +10199,42 @@ function HtmlViewer({
       ...(context?.versionId ? { versionId: context.versionId } : {}),
     }));
   }
+  // 导入到pixso
+  function triggerPixsoExport(isSplit?:boolean) {
+    let html = source || '';
+    if (!html.includes('<head>') && !html.includes('<HEAD>')) {
+      setExportToast({ message: '当前文件不是有效的 HTML，无法导入 Pixso', tone: 'error' });
+      return;
+    }
+    setExportToast({ message: '正在推送到 Pixso...', tone: 'loading' });
+    let ws: WebSocket | null = null;
+    let dismissed = false;
+    try {
+      ws = new WebSocket('ws://localhost:9528');
+      ws.onopen = () => {
+        if (dismissed) return;
+        if(isSplit){
+          html = html
+             .replace('<head>', `<head><script>window.__mcp__use__sub__pages=true</script>`)
+             .replace('<HEAD>', `<HEAD><script>window.__mcp__use__sub__pages=true</script>`)
+        }
+        ws?.send(html);
+        ws?.close();
+        setExportToast({ message: '已推送到 Pixso', tone: 'success' });
+      };
+      ws.onmessage = (event) => {
+      };
+      ws.onerror = () => {
+        ws?.close();
+      };
+      ws.onclose = () => {
+        ws = null;
+      };
+    } catch {
+      setExportToast({ message: 'Pixso 推送服务连接失败', tone: 'error' });
+      ws = null;
+    }
+  }
 
   useEffect(() => {
     const nudgeKey = `${projectId}\n${file.name}`;
@@ -11860,12 +11896,25 @@ function HtmlViewer({
                     role="menuitem"
                     onClick={() => {
                       setDownloadMenuOpen(false);
-                      triggerHtmlExport();
+                      triggerPixsoExport();
                     }}
                     style={{color:'#2080F7'}}
                   >
                     <span className="share-menu-icon"><RemixIcon name="file-code-line" size={15} /></span>
                     <span>导入到 Pixso</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="share-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setDownloadMenuOpen(false);
+                      triggerPixsoExport(true);
+                    }}
+                    style={{color:'#2080F7'}}
+                  >
+                    <span className="share-menu-icon"><RemixIcon name="file-code-line" size={15} /></span>
+                    <span>导入到 Pixso ( 智能拆分 )</span>
                   </button>
                   <button
                     type="button"

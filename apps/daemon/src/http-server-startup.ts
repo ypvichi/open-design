@@ -1,7 +1,10 @@
 import { spawn, execSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { platform, networkInterfaces } from 'node:os';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * http-server-startup.ts
@@ -17,6 +20,68 @@ type StartedServer = {
   url: string;
   stop(): Promise<void>;
 };
+
+/** 启动 ws-server.mjs 子进程 */
+function startWsServer(): ChildProcess {
+  // 注意：编译后 __dirname 指向 dist/，所以到 bin/ 只需 ../
+  const wsScriptPath = resolve(__dirname, '../bin/ws-server.mjs');
+  console.log('[ws-server] starting...', wsScriptPath);
+  const wsChild = spawn(process.execPath, [wsScriptPath], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: false,
+    windowsHide: true,
+    cwd: process.cwd(),
+  });
+
+  wsChild.stdout?.on('data', (data: Buffer) => {
+    const text = data.toString().trim();
+    if (text) console.log(`[ws-server] ${text}`);
+  });
+
+  wsChild.stderr?.on('data', (data: Buffer) => {
+    const text = data.toString().trim();
+    if (text) console.error(`[ws-server] ${text}`);
+  });
+
+  wsChild.on('error', (error) => {
+    console.error('[ws-server] spawn error:', error.message);
+  });
+
+  return wsChild;
+}
+
+/** 关闭 ws-server.mjs（通过 -command close） */
+async function stopWsServer(): Promise<void> {
+  // 注意：编译后 __dirname 指向 dist/，所以到 bin/ 只需 ../
+  const wsScriptPath = resolve(__dirname, '../bin/ws-server.mjs');
+  return new Promise((resolveClose) => {
+    const closeChild = spawn(process.execPath, [wsScriptPath, '-command', 'close'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false,
+      windowsHide: true,
+      cwd: process.cwd(),
+    });
+
+    let stdout = '';
+    closeChild.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    closeChild.on('close', () => {
+      if (stdout.includes('graceful shutdown signal sent')) {
+        // 等待 ws-server 进程退出
+        setTimeout(() => resolveClose(), 500);
+      } else {
+        resolveClose();
+      }
+    });
+
+    closeChild.on('error', () => resolveClose());
+
+    // 兜底：5秒后强制 resolve
+    setTimeout(() => resolveClose(), 5000);
+  });
+}
 
 export type StartedHttpServerRuntime = StartedServer;
 
@@ -161,7 +226,7 @@ function killProcessTree(pid: number): void {
 }
 
 /** 优雅地停止 http-server 子进程 */
-export async function stopHttpServer(child: ChildProcess, { closeTimeoutMs = 5_000 } = {}): Promise<void> {
+export async function stopHttpServer(child: ChildProcess, wsChild?: ChildProcess, { closeTimeoutMs = 5_000 } = {}): Promise<void> {
   if (child.killed || child.exitCode !== null) {
     return;
   }
@@ -199,6 +264,15 @@ export async function stopHttpServer(child: ChildProcess, { closeTimeoutMs = 5_0
 
     // 先尝试优雅关闭，超时后 killProcessTree 兜底
     child.kill('SIGTERM');
+  }).finally(async () => {
+    // 同时关闭 ws-server
+    if (wsChild) {
+      try {
+        await stopWsServer();
+      } catch {
+        // ignore
+      }
+    }
   });
 }
 
@@ -299,7 +373,7 @@ function killProcessByPort(port: number): void {
 }
 
 /**
- * 启动 http-server 静态文件服务。
+ * 启动 http-server 静态文件服务，同时启动 ws-server.mjs WebSocket 服务。
  * 子进程使用 detached: false 绑定到父进程，确保父进程退出时子进程也被清理。
  */
 export async function startHttpServerRuntime(options: { host: string; port: number; directory: string }): Promise<StartedHttpServerRuntime> {
@@ -329,6 +403,9 @@ export async function startHttpServerRuntime(options: { host: string; port: numb
       cwd: process.cwd(),
     });
 
+    // 同时启动 ws-server
+    const wsChild = startWsServer();
+
     let stdout = '';
     let stderr = '';
     let resolved = false;
@@ -340,7 +417,7 @@ export async function startHttpServerRuntime(options: { host: string; port: numb
       urlResolved = true;
       resolve({
         url,
-        stop: () => stopHttpServer(child),
+        stop: () => stopHttpServer(child, wsChild),
       });
     };
 
