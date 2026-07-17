@@ -1,6 +1,6 @@
 import type { NextConfig } from 'next';
 import { existsSync, realpathSync } from 'node:fs';
-import { networkInterfaces } from 'node:os';
+import { hostname, networkInterfaces } from 'node:os';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -155,23 +155,11 @@ function configuredAllowedDevHosts(): string[] {
   ]));
 }
 
-function getFirstIpv4(): string | null {
-  const interfaces = networkInterfaces();
-  for (const entries of Object.values(interfaces)) {
-    for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal) {
-        return entry.address;
-      }
-    }
-  }
-  return null;
-}
-
-const FIRST_IPV4 = getFirstIpv4() ?? '127.0.0.1';
+const COMPUTER_NAME = hostname();
 
 const nextConfig: NextConfig = {
   env: {
-    NEXT_PUBLIC_HTTP_SERVER_URL: `http://${FIRST_IPV4}:9529/`,
+    NEXT_PUBLIC_HTTP_SERVER_URL: `http://${COMPUTER_NAME}:9529/`,
   },
   allowedDevOrigins: configuredAllowedDevHosts(),
   outputFileTracingRoot: WORKSPACE_ROOT,
