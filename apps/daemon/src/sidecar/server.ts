@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import path from "node:path"
 
 import {
   APP_KEYS,
@@ -26,7 +25,7 @@ import {
 } from "@open-design/sidecar";
 
 import { startDaemonRuntime, type StartedDaemonRuntime } from "../daemon-startup.js";
-import { startHttpServerRuntime, getLocalIPv4Address } from "../http-server-startup.js";
+import { startWsServer } from "../ws-server-startup.js";
 import {
   getDesktopAuthSecret,
   isDesktopAuthGateActive,
@@ -163,12 +162,8 @@ export async function startDaemonSidecar(runtime: SidecarRuntimeContext<SidecarS
     runtime,
   });
 
-  // Start companion http-server for static file serving alongside the daemon.
-  const httpServer = await startHttpServerRuntime({
-    host: getLocalIPv4Address(),
-    port: 9529,
-    directory: path.join(process.env.OD_DATA_DIR || path.join(process.cwd(), '.od'), 'projects'),
-  });
+  // Start WebSocket server alongside the daemon.
+  const wsServer = startWsServer();
 
   // PR #974 round 6 (mrcfps): tools-dev's split-start hardening reads
   // `desktopAuthGateActive` from the STATUS IPC. The flag is dynamic
@@ -178,7 +173,6 @@ export async function startDaemonSidecar(runtime: SidecarRuntimeContext<SidecarS
   // a startup snapshot only.
   const state: DaemonStatusSnapshot = {
     desktopAuthGateActive: isDesktopAuthGateActive(),
-    httpServerUrl: httpServer.url,
     pid: process.pid,
     state: "running",
     trustedWebOriginPort: parseOptionalTrustedWebPort(process.env[WEB_PORT_ENV]),
@@ -199,7 +193,7 @@ export async function startDaemonSidecar(runtime: SidecarRuntimeContext<SidecarS
     state.updatedAt = new Date().toISOString();
     await ipcServer?.close().catch(() => undefined);
     await serverHandle.stop().catch(() => undefined);
-    await httpServer.stop().catch(() => undefined);
+    await wsServer.stop().catch(() => undefined);
     resolveStopped();
   }
 

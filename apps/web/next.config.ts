@@ -159,7 +159,7 @@ const COMPUTER_NAME = hostname();
 
 const nextConfig: NextConfig = {
   env: {
-    NEXT_PUBLIC_HTTP_SERVER_URL: `http://${COMPUTER_NAME}:9529/`,
+    NEXT_PUBLIC_HTTP_SERVER_URL: `http://${COMPUTER_NAME}:${Number(process.env.OD_WEB_PORT)}/`,
   },
   allowedDevOrigins: configuredAllowedDevHosts(),
   outputFileTracingRoot: WORKSPACE_ROOT,

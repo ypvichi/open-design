@@ -50,6 +50,21 @@ export async function ensureSharedPortsResolved(
     return;
   }
 
+  // Try the preferred default port first; fall back to dynamic allocation
+  // if it is already in use.
+  try {
+    const allocation = await allocate({
+      host: "127.0.0.1",
+      label: "web",
+      port: 9529,
+      reserved,
+    });
+    options.webPort = String(allocation.port);
+    return;
+  } catch {
+    // Preferred port unavailable; fall through to dynamic allocation below.
+  }
+
   const { port } = await allocate({
     host: "127.0.0.1",
     label: "web",

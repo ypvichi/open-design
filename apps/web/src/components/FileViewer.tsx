@@ -9708,8 +9708,7 @@ function HtmlViewer({
     let fileData = file as any;
     const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
     const fileName = fileData.name;
-    console.log('file',file,process.env.NEXT_PUBLIC_HTTP_SERVER_URL);
-    let lastUrl = `${process.env.NEXT_PUBLIC_HTTP_SERVER_URL}${projectId}/${fileName}`;
+    let lastUrl = `${process.env.NEXT_PUBLIC_HTTP_SERVER_URL}api/projects/${projectId}/raw/${fileName}`;
     // firePresentPopoverClick('new_tab');
     // let url = presentNewTab(true);
     console.log('复制分享链接',lastUrl);

@@ -269,13 +269,11 @@ function printRunForegroundResult(started: Partial<Record<ToolDevAppName, unknow
   const daemonStatus = asRecord(asRecord(started.daemon)?.status);
   const webUrl = stringField(webStatus ?? {}, "url");
   const daemonUrl = stringField(daemonStatus ?? {}, "url");
-  const httpServerUrl = stringField(daemonStatus ?? {}, "httpServerUrl");
 
-  if (webUrl != null || daemonUrl != null || httpServerUrl != null) {
+  if (webUrl != null || daemonUrl != null) {
     process.stdout.write("\n  Open Design dev server ready\n\n");
-    if (webUrl != null) process.stdout.write(`  ➜  Web:    ${colorizeLink(normalizeDisplayUrl(webUrl))}\n`);
+    if (webUrl != null) process.stdout.write(`  ➜  Web:    ${colorizeLink(normalizeDisplayUrl(webUrl.replace('0.0.0.0','127.0.0.1')))}\n`);
     if (daemonUrl != null) process.stdout.write(`  ➜  Daemon: ${colorizeLink(normalizeDisplayUrl(daemonUrl))}\n`);
-    if (httpServerUrl != null) process.stdout.write(`  ➜  Static:   ${colorizeLink(normalizeDisplayUrl(httpServerUrl))}\n`);
     process.stdout.write("\n  Press Ctrl+C to stop\n\n");
     return;
   }
@@ -485,6 +483,7 @@ async function spawnWebRuntime(config: ToolDevConfig, options: CliOptions): Prom
         [SIDECAR_ENV.WEB_TSCONFIG_PATH]: config.apps.web.nextTsconfigPath,
         [SIDECAR_ENV.WEB_PORT]: String(webPort ?? 0),
         PORT: String(webPort ?? 0),
+        OD_HOST: process.env.OD_HOST || "0.0.0.0",
         ...(options.parentPid == null ? {} : { [TOOLS_DEV_PARENT_PID_ENV]: String(options.parentPid) }),
         ...(options.prod === true
           ? { NODE_ENV: "production", OD_WEB_OUTPUT_MODE: "server", OD_WEB_PROD: "1" }
