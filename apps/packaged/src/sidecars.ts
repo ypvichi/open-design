@@ -613,10 +613,11 @@ export async function startPackagedSidecars(
       entryPath: options.webSidecarEntry ?? resolveSidecarEntry("@open-design/web", "sidecar"),
       env: {
         [SIDECAR_ENV.DAEMON_PORT]: extractPort(daemonStatus.url),
-        [SIDECAR_ENV.WEB_PORT]: "0",
+        [SIDECAR_ENV.WEB_PORT]: "9529",
         ...(options.webStandaloneRoot == null ? {} : { OD_WEB_STANDALONE_ROOT: options.webStandaloneRoot }),
         OD_WEB_OUTPUT_MODE: options.webOutputMode,
-        PORT: "0",
+        PORT: "9529",
+        OD_HOST: "0.0.0.0",
       },
       electronNodeCommand: options.electronNodeCommand,
       nodeCommand: options.nodeCommand,

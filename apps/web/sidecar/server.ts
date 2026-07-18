@@ -13,6 +13,7 @@ import { createRequire } from "node:module";
 import { createConnection, createServer as createTcpServer, type AddressInfo, type Server as TcpServer } from "node:net";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import os from "node:os";
 
 import {
   SIDECAR_ENV,
@@ -367,7 +368,7 @@ function isPrivateLanIpv4(value: string): boolean {
 
 function isLoopbackOrPrivateLanHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
-  return (
+  if (
     host === "localhost" ||
     host === "127.0.0.1" ||
     host === "::1" ||
@@ -375,7 +376,16 @@ function isLoopbackOrPrivateLanHost(hostname: string): boolean {
     host === "0.0.0.0" ||
     host === "::" ||
     isPrivateLanIpv4(host)
-  );
+  ) {
+    return true;
+  }
+  // Accept the machine's own hostname so LAN access works
+  try {
+    if (host === os.hostname().toLowerCase()) return true;
+  } catch {
+    // os.hostname() can throw in some environments; fall through
+  }
+  return false;
 }
 
 function defaultPortForProtocol(protocol: string): string {
@@ -807,12 +817,20 @@ async function createWebSidecarHandle(
   closeRuntime: () => Promise<void> | void,
   isRuntimeRunning?: () => boolean,
 ): Promise<WebSidecarHandle> {
-  const port = await listen(httpServer, parsePort(process.env[WEB_PORT_ENV]));
+  const requestedPort = parsePort(process.env[WEB_PORT_ENV]);
+  let port: number;
+  try {
+    port = await listen(httpServer, requestedPort);
+  } catch {
+    // Fallback to a random port if the requested one is unavailable.
+    port = await listen(httpServer, 0);
+  }
+  const reportHost = HOST === "0.0.0.0" ? "127.0.0.1" : HOST;
   const state: WebStatusSnapshot = {
     pid: process.pid,
     state: "running",
     updatedAt: new Date().toISOString(),
-    url: `http://${HOST}:${port}`,
+    url: `http://${reportHost}:${port}`,
   };
   let ipcServer: JsonIpcServerHandle | null = null;
   let stopped = false;

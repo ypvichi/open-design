@@ -1,3 +1,5 @@
+import os from 'node:os';
+
 export interface ParsedHostHeader {
   hostname: string;
   host: string;
@@ -150,6 +152,22 @@ export function isLoopbackOrPrivateLanHost(hostname: unknown): boolean {
   );
 }
 
+/** Detect whether a hostname is the local machine's own network identity.
+ *  Accepts loopback, private LAN IPs, and the machine's own hostname so
+ *  LAN access (e.g. http://my-pc:9529) is not blocked by the same-origin
+ *  guard when the operator has already bound the daemon to 0.0.0.0.
+ */
+function isLocalMachineHost(hostname: string): boolean {
+  if (isLoopbackOrPrivateLanHost(hostname)) return true;
+  // Accept the machine's own hostname (case-insensitive)
+  try {
+    if (hostname.toLowerCase() === os.hostname().toLowerCase()) return true;
+  } catch {
+    // os.hostname() can throw in some environments; fall through
+  }
+  return false;
+}
+
 export function isAllowedBrowserHost(
   hostHeader: unknown,
   ports: number[],
@@ -170,7 +188,7 @@ export function isAllowedBrowserHost(
   if (explicitHosts.has(requestHost.host)) return true;
 
   if (!ports.map(String).includes(requestHost.port)) return false;
-  return isLoopbackOrPrivateLanHost(requestHost.hostname);
+  return isLocalMachineHost(requestHost.hostname);
 }
 
 export function isAllowedBrowserOrigin(
@@ -206,7 +224,7 @@ export function isAllowedBrowserOrigin(
   const originPort = parsedOrigin.port || (parsedOrigin.protocol === 'https:' ? '443' : '80');
   if (!ports.map(String).includes(originPort)) return false;
   if (parsedOrigin.hostname !== requestHost.hostname) return false;
-  return isLoopbackOrPrivateLanHost(parsedOrigin.hostname);
+  return isLocalMachineHost(parsedOrigin.hostname);
 }
 
 export function isLocalSameOrigin(
@@ -217,7 +235,7 @@ export function isLocalSameOrigin(
   const host = String(headerValue(req.headers?.host) || '');
   const origin = headerValue(req.headers?.origin);
   const ports = allowedBrowserPorts(port, env);
-  const bindHost = env.OD_BIND_HOST || '127.0.0.1';
+  const bindHost = env.OD_BIND_HOST || '0.0.0.0';
   const extraAllowedOrigins = configuredAllowedOrigins(env);
   const ipOnlyExtraOrigins = extraAllowedOrigins.filter((o) =>
     isIpLiteralHostname(new URL(o).hostname),
