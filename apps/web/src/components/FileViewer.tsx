@@ -13084,7 +13084,7 @@ function HtmlViewer({
                   //void deployToSelectedProvider();
                 }}
               >
-                {deploying?'正在发布':`${iuxLink?'取消':''}发布`}
+                {deploying?`正在${iuxLink?'取消':''}发布`:`${iuxLink?'取消':''}发布`}
               </button>
             </div>
           </div>
