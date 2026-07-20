@@ -1252,7 +1252,7 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
         animationData={animationData}
         loop={true}
         autoplay={true}
-        style={{ width: 500, height: 180 }}
+        style={{ width: 200, height: 200 }}
       />
       <div className="home-hero__brand" aria-hidden>
         <span className="home-hero__brand-mark od-brand-glyph" />
