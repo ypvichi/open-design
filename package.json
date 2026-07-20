@@ -11,8 +11,8 @@
   },
   "scripts": {
     "postinstall": "node ./scripts/postinstall.mjs",
-    "iux-win-pack":"pnpm exec tools-pack win build --namespace IUX --to nsis",
-    "iux-mac-pack":"pnpm exec tools-pack mac build --namespace IUX --to all",
+    "iux-win-pack":"pnpm postinstall && pnpm exec tools-pack win build --namespace IUX --to nsis",
+    "iux-mac-pack":"pnpm postinstall && pnpm exec tools-pack mac build --namespace IUX --to all",
     "tools-dev": "pnpm exec tools-dev",
     "tools-pack": "pnpm exec tools-pack",
     "tools-release": "pnpm exec tools-release",
