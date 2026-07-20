@@ -112,6 +112,7 @@ import { RecommendedStartRegion } from './RecommendedStartRegion';
 import type { Recommendation } from '../onboarding/recommendation';
 import type { OnboardingEntry } from '../onboarding/onboarding-entry';
 import { AnimatePresence } from 'motion/react';
+import { AI_BUILDER_WEB_PREX } from './workspace-context';
 
 export interface ActivePlugin {
   record: InstalledPluginRecord;
@@ -534,7 +535,7 @@ export function HomeView({
         console.log('我通过发请求获取插件数据',rows)
         // setPluginsLoading(false);
         listPlugins({
-          url:"http://localhost:7001/webapi/v1/od/plugins"
+          url:`${AI_BUILDER_WEB_PREX}/webapi/v1/od/plugins`
         }).then((rows2)=>{
           console.log('我通过AI Builder发请求获取插件数据',rows2)
           setPlugins(rows);

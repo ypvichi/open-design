@@ -1,5 +1,8 @@
 import type { WorkspaceContextItem } from '@open-design/contracts';
 
+export const AI_BUILDER_WEB_PREX:string = `https://pixso.hikvision.com.cn/hik-plugin/ai-builder-web`
+// export const AI_BUILDER_WEB_PREX:string = `http://localhost:7001`
+
 export function workspaceContextLinkedDir(item: WorkspaceContextItem): string | null {
   if (item.kind !== 'local-code' && item.kind !== 'project') return null;
   const dir = item.absolutePath?.trim();

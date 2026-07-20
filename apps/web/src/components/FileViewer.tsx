@@ -209,6 +209,8 @@ import {
 import { MANUAL_EDIT_STYLE_PROPS, type ManualEditBridgeMessage, type ManualEditHistoryEntry, type ManualEditPatch, type ManualEditStyles, type ManualEditTarget } from '../edit-mode/types';
 import { isRenderableSketchJson, SketchPreview } from './SketchPreview';
 
+import { AI_BUILDER_WEB_PREX } from './workspace-context';
+
 function resolveChromeActionsHost(): HTMLElement | null {
   return document.querySelector<HTMLElement>(APP_CHROME_FILE_ACTIONS_SELECTOR)
     ?? document.getElementById(APP_CHROME_FILE_ACTIONS_ID);
@@ -6223,6 +6225,7 @@ function HtmlViewer({
   }, [fileViewportKey]);
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
   const zoomMenuRef = useRef<HTMLDivElement | null>(null);
+  const [iuxLink,setIuxLink] = useState('');
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
   const [deployMenuOpen, setDeployMenuOpen] = useState(false);
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
@@ -6276,6 +6279,7 @@ function HtmlViewer({
   const [cloudflareDomainPrefix, setCloudflareDomainPrefix] = useState('');
   const deployProviderLoadSeqRef = useRef(0);
   const deployTokenInputRef = useRef<HTMLInputElement | null>(null);
+  const checkIuxLinkDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!deployModalOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -9671,22 +9675,83 @@ function HtmlViewer({
       domainPrefix: prefix,
     };
   }
+  async function checkIuxLink() {
+    if (checkIuxLinkDebounceTimerRef.current) {
+      clearTimeout(checkIuxLinkDebounceTimerRef.current);
+    }
+    checkIuxLinkDebounceTimerRef.current = setTimeout(async () => {
+      let fileData = file as any;
+      const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
+      const fileName = fileData.name;
+      const resp = await fetch(`${AI_BUILDER_WEB_PREX}/webapi/v1/od/plugin/${projectId}/${fileName}`,{
+        method:"GET"
+      });
+      if(resp?.ok){
+        try{
+          let result = await resp.json();
+          if(result?.data?.path){
+              let lastUrl = `${AI_BUILDER_WEB_PREX}${result.data.path}`
+              setIuxLink(lastUrl);
+          }else{
+            setIuxLink('')
+          }
+        }catch(e){
+          setIuxLink('')
+        }
+      }else{
+        setIuxLink('')
+      }
+      checkIuxLinkDebounceTimerRef.current = null;
+    }, 300);
+  }
   async function deployToIux(type?:any){
     setDeploying(true);
     let fileData = file as any;
     const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
     const fileName = fileData.name;
     //console.log('工程Id是',projectId,'文件名是',fileName)
-    fetchProjectFileText(projectId,fileName).then((text) => {
+    fetchProjectFileText(projectId,fileName).then(async (text) => {
         const html = text;
-        const params = {
+        const params:any = {
             projectId,
             fileName,
             html
         }
-        console.log('我的html提交参数是',params);
+        if(iuxLink){
+           params.isDelete=true;
+        }
+        const resp = await fetch(`${AI_BUILDER_WEB_PREX}/webapi/v1/od/plugin`,{
+            method:"POST",
+            body: JSON.stringify(params),
+            headers: {
+              "Content-Type":"application/json"
+            }
+        });
+        const cancelLabel = iuxLink?'取消':'';
+        if (resp.ok){
+          setExportToast({
+            message:cancelLabel+'发布成功!',
+            tone: 'success',
+          });
+          if(!iuxLink){
+            let result = await resp.json();
+            let lastUrl = `${AI_BUILDER_WEB_PREX}${result.data.path}`
+            setIuxLink(lastUrl);
+          }else{
+            setIuxLink('');
+          }
+        }else{
+          setExportToast({
+            message:cancelLabel+'发布失败!',
+            tone: 'error',
+          });
+        }
         setDeploying(false);
-    });
+        //setDeployModalOpen(false);
+    }).catch(e=>{
+        setDeploying(false);
+        //setDeployModalOpen(false);
+    })
   }
   async function deployToSelectedProvider() {
     setDeploying(true);
@@ -9850,18 +9915,22 @@ function HtmlViewer({
     document.execCommand("copy");
     document.body.removeChild(input);
   }
-  async function copyLocalShareLink(){
+  async function copyLocalShareLink(url?:string){
     setDeployMenuOpen(false);
-    let fileData = file as any;
-    const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
-    const fileName = fileData.name;
-    let lastUrl = `${process.env.NEXT_PUBLIC_HTTP_SERVER_URL}api/projects/${projectId}/raw/${fileName}`;
+    let lastUrl;
+    if(url){
+     lastUrl = url;
+    }else{
+      let fileData = file as any;
+      const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
+      const fileName = fileData.name;
+      lastUrl = `${process.env.NEXT_PUBLIC_HTTP_SERVER_URL}api/projects/${projectId}/raw/${fileName}`;
+    }
     // firePresentPopoverClick('new_tab');
     // let url = presentNewTab(true);
-    console.log('复制分享链接',lastUrl);
     handleCopy(lastUrl)
     setExportToast({
-        message:'复制分享链接成功',
+        message:'复制链接成功',
         tone: 'success',
       });
     //console.log('复制本地分享链路',file,liveArtifactPreviewUrl(projectId, liveArtifact.artifactId));
@@ -10466,7 +10535,13 @@ function HtmlViewer({
     setExportReadyNudge(false);
     markExportReadyNudgeSeen(projectId, file.name);
     setDownloadMenuOpen(false);
-    setDeployMenuOpen((v) => !v);
+    setDeployMenuOpen((v) => {
+      if(!v){
+        checkIuxLink()
+      }
+      return !v;
+    });
+    
   };
   const captureExportImageSnapshot = useCallback(async (
     options?: { wholeDeck?: boolean; context?: HtmlVersionExportContext | null },
@@ -11875,7 +11950,6 @@ function HtmlViewer({
                             type="button"
                             className="share-menu-item"
                             role="menuitem"
-                            title={!canCopyShareLink ? shareUnavailableHint : shareLinkStatusHint || undefined}
                             onClick={() => {
                               copyLocalShareLink();
                               // if (!canCopyShareLink || !sharePageUrl) return;
@@ -11895,6 +11969,32 @@ function HtmlViewer({
                               ) : null} */}
                             </span>
                           </button>
+                      {iuxLink?
+                      <button
+                            type="button"
+                            className="share-menu-item"
+                            role="menuitem"
+                            title={'修改文件后，需重新发布到IUX Group更新链接'}
+                            onClick={() => {
+                              copyLocalShareLink(iuxLink);
+                              // if (!canCopyShareLink || !sharePageUrl) return;
+                              // fireShareExport('share_link', async () => {
+                              //   const ok = await copyShareLink(sharePageUrl);
+                              //   if (!ok) throw new Error('copy_share_link_failed');
+                              // });
+                            }}
+                            style={{color:'#2080F7'}}
+                          >
+                            <span className="share-menu-icon"><RemixIcon name="file-copy-line" size={15} /></span>
+                            <span className="share-menu-text">
+                              <span>复制IUX链接</span>
+                              <small></small>
+                              {/* {shareLinkStatusHint ? (
+                                <small>{shareLinkStatusHint}</small>
+                              ) : null} */}
+                            </span>
+                          </button>
+                      :null}
                       {/* {sharePageUrl ? (
                         <>
                           <button
@@ -12909,14 +13009,14 @@ function HtmlViewer({
             <div className="deploy-flow-modal__scroll">
               <div className="modal-head">
                 <div className="kicker">{deployModalKicker}</div>
-                <h2>部署到 IUX Group</h2>
+                <h2>发布到 IUX Group</h2>
                 <p className="subtitle">
-                  把HTML文件部署到公司内网平台，方便在线分享预览
+                  把HTML文件发布到公司内网平台，方便在线分享预览
                 </p>
               </div>
               <div className="deploy-form">
               <label className="deploy-provider-field">
-                <span className="deploy-field-title">{t('fileViewer.deployProviderLabel')}</span>
+                <span className="deploy-field-title">{'发布平台'}</span>
                 <select
                   disabled
                 >
@@ -12925,7 +13025,45 @@ function HtmlViewer({
                     </option>
                 </select>
               </label>
-              
+              {iuxLink?
+              <div className={`deploy-result-block ${deployResultState('ready')}`}>
+                  <div className="deploy-result-summary">
+                    <div className="deploy-result-summary-head">
+                      <div className="deploy-result-label">{'发布链接'}</div>
+                      <div className={`deploy-result-badge ${deployResultState('ready')}`}>
+                        {statusLabelFor(deployResultState('ready'))}
+                      </div>
+                    </div>
+                    <div className="deploy-result-links">
+                      <div className={`deploy-result-link ${'ready'}`}>
+                            <div className="deploy-result-link-main">
+                              <a
+                                className="deploy-result-url"
+                                href={iuxLink}
+                                target="_blank"
+                                style={{color:'#2080F7'}}
+                                rel="noreferrer noopener"
+                              >
+                                {iuxLink}
+                              </a>
+                            </div>
+                            <div className="deploy-result-actions">
+                              <button
+                                type="button"
+                                className="viewer-action"
+                                onClick={() => {
+                                  void copyLocalShareLink(iuxLink)
+                                }}
+                              >
+                                <Icon name="copy" size={14} />
+                                <span>{t('fileViewer.copyDeployLink')}</span>
+                              </button>
+                            </div>
+                          </div>
+                    </div>
+                  </div>
+              </div>
+              :null}
               </div>
             </div>
             <div className="modal-foot">
@@ -12946,7 +13084,7 @@ function HtmlViewer({
                   //void deployToSelectedProvider();
                 }}
               >
-                {deploying?'正在部署':'部署'}
+                {deploying?'正在发布':`${iuxLink?'取消':''}发布`}
               </button>
             </div>
           </div>
