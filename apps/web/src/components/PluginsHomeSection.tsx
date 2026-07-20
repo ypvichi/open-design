@@ -110,7 +110,7 @@ export function PluginsHomeSection({
     iuxPlugins,
     plugins,
     savedPluginIds,
-    preferDefaultFacet,
+    preferDefaultFacet: cardLayout === 'gallery' ? false : preferDefaultFacet,
     locale,
   });
   const renderedPlugins = useMemo(
@@ -118,9 +118,7 @@ export function PluginsHomeSection({
     [filtered, renderLimit],
   );
   const hasMorePlugins = renderLimit < filtered.length;
-  const categoryAllVisible = cardLayout !== 'gallery';
   const handlePickCategory = (slug: string | null): void => {
-    if (!categoryAllVisible && slug === selection.category) return;
     pickCategory(slug);
   };
 
@@ -216,7 +214,7 @@ export function PluginsHomeSection({
               onToggleIux={() =>
                 setMode(mode === 'iux' ? 'all' : 'iux')
               }
-              showAll={categoryAllVisible}
+              showAll
               query={query}
               onQueryChange={setQuery}
               sortOrder={sortOrder}
