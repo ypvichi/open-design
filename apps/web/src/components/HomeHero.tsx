@@ -65,8 +65,9 @@ import {
 } from '../utils/inlineMentions';
 import { useI18n, useT } from '../i18n';
 import { localizePluginDescription, localizePluginTitle } from './plugins-home/localization';
+import { AI_BUILDER_WEB_PREX } from './workspace-context';
 import Lottie from 'lottie-react';
-import animationData from '../../public/lottie/hero-animation.json';
+import defaultAnimationData from '../../public/lottie/hero-animation.json';
 import {
   examplePresetSeedPrompt,
   pluginPresetQuery,
@@ -408,6 +409,8 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
   }, [activeChipId]);
   const [selectedPromptExample, setSelectedPromptExample] = useState<SelectedPromptExample | null>(null);
   const [previewHomeFileKey, setPreviewHomeFileKey] = useState<string | null>(null);
+  const [remoteAnimationData, setRemoteAnimationData] = useState<unknown | null>(null);
+  const animationData = remoteAnimationData ?? null;
   const [stagedFilePreviewUrls, setStagedFilePreviewUrls] = useState<Map<string, string>>(() => new Map());
   // Lexical-driven @-trigger state (replaces the old end-anchored
   // getContextMention regex) + the caret box the popover anchors to.
@@ -764,6 +767,24 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
   const inputCardStyle = {
     '--home-hero-prompt-max-height': `${promptMaxHeight}px`,
   } as CSSProperties;
+
+  // Fetch remote animation data; fall back to the bundled JSON on failure.
+  useEffect(() => {
+    fetch(`${AI_BUILDER_WEB_PREX}/public/webresources/lottie/hero-animation.json`)
+      .then((res) => {
+        if (!res.ok){
+          return defaultAnimationData
+        }
+        return res.json();
+      })
+      .then((data) => {
+        setRemoteAnimationData(data)
+      })
+      .catch(() => {
+        setRemoteAnimationData(defaultAnimationData)
+        // Silently fall back to defaultAnimationData
+      });
+  }, []);
 
   useEffect(() => {
     if (selectedIndex >= visiblePickerOptions.length) setSelectedIndex(0);
