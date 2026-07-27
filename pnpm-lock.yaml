@@ -41,6 +41,9 @@ importers:
       '@types/node':
         specifier: 20.19.39
         version: 20.19.39
+      '@zumer/snapdom':
+        specifier: ^2.18.0
+        version: 2.22.0
       tsx:
         specifier: 4.22.3
         version: 4.22.3
@@ -3048,6 +3051,9 @@ packages:
 
   '@xterm/xterm@5.5.0':
     resolution: {integrity: sha512-hqJHYaQb5OptNunnyAnkHyM8aCjZ1MEIDTQu1iIbbTD/xops91NB5yq1ZK/dC2JDbVWtF23zUtl9JE2NqwT87A==}
+
+  '@zumer/snapdom@2.22.0':
+    resolution: {integrity: sha512-XfOa0pqiRj9+zsrHm5+hLmKMmMuFxIhrmrSrJKMkSf9DFGnDsql89bd4IMFnLMWl1WmW0X5YOjtSZi8jvYkbVw==}
 
   abbrev@4.0.0:
     resolution: {integrity: sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA==}
@@ -8947,6 +8953,8 @@ snapshots:
       '@xterm/xterm': 5.5.0
 
   '@xterm/xterm@5.5.0': {}
+
+  '@zumer/snapdom@2.22.0': {}
 
   abbrev@4.0.0: {}
 
