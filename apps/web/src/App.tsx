@@ -1529,6 +1529,7 @@ function AppInner() {
     async (
       input: AppCreateProjectInput,
     ): Promise<boolean> => {
+      console.log('官方创建工程的参数',input);
       // Honor an explicit `null` design system — the create panel defaults
       // to "None" for every kind now, and the user expects that to land
       // as a no-design-system project rather than silently inheriting the
@@ -2593,6 +2594,22 @@ function AppInner() {
         className={`workspace-shell workspace-shell--${clientType}`}
         data-client-type={clientType}
       >
+        {/* <div className='workspace-custom-header app-chrome-header workspace-tabs-chrome'>
+          <button
+              type="button"
+              className="chrome-action chrome-action-primary"
+              aria-haspopup="menu">
+              <span>设计空间</span>
+          </button>
+          <button
+              type="button"
+              className="chrome-action chrome-action-secondary"
+              aria-haspopup="menu">
+              <span>流程空间</span>
+          </button>
+        </div> */
+        <div></div>
+        }
         <WorkspaceTabsBar
           route={route}
           projects={projects}

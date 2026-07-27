@@ -936,7 +936,36 @@
 /* Project page audit pass: one final rule set for the active project shell.
    Keep the outer panes flat; only controls and repeated items get radius. */
 .workspace-shell {
-  grid-template-rows: 34px minmax(0, 1fr);
+  grid-template-rows: auto 34px minmax(0, 1fr);
+}
+.workspace-shell .workspace-custom-header{
+  position: relative;
+  height: auto !important;
+  min-height: 24px !important;
+  padding: 4px !important;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.workspace-custom-header .chrome-action {
+  height: 24px;
+}
+.workspace-custom-header .chrome-action:not(:last-child){
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.workspace-custom-header .chrome-action:last-child{
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.workspace-custom-header .chrome-action-primary {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  color:white;
+}
+.workspace-custom-header .chrome-action-secondary {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .workspace-shell .workspace-tabs-chrome.app-chrome-header {
   --workspace-tabs-chrome-height: 34px;

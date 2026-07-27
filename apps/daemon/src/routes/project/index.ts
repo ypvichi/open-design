@@ -59,6 +59,8 @@ import { registerProjectConversationRoutes } from './conversations.js';
 import { cancelRunsOwnedBy } from './cancel-owned-runs.js';
 
 export interface RegisterProjectRoutesDeps extends RouteDeps<'db' | 'design' | 'http' | 'paths' | 'projectStore' | 'projectFiles' | 'conversations' | 'templates' | 'status' | 'events' | 'ids' | 'telemetry' | 'appConfig' | 'agents' | 'validation'> {}
+export const AI_BUILDER_WEB_PREX:string = `https://pixso.hikvision.com.cn/hik-plugin/ai-builder-web`
+//export const AI_BUILDER_WEB_PREX:string = `http://localhost:7001`
 
 function projectDetailResolvedDir(
   projectsRoot: string,
@@ -1778,6 +1780,26 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
           resolvedSnapshot = resolved;
         }
       }
+      async function __getTemplate(group: any) {
+        if (group === 'iux' && metadata?.templateId) {
+          try {
+            const resp = await fetch(
+              `${AI_BUILDER_WEB_PREX}/webapi/v1/od/template/${metadata.templateId}`,
+            );
+            if (!resp.ok) {
+              return {};
+            }
+            const json = (await resp.json()) as any
+            if (json.code !== 0 || !json.data) {
+              return {};
+            }
+            return json.data;
+          } catch {
+            return {};
+          }
+        }
+        return {};
+      }
       // For "from template" projects, seed the chosen template's snapshot
       // HTML into the new project folder so the agent can Read/edit files
       // on disk (the system prompt also embeds them, but a real on-disk
@@ -1788,7 +1810,9 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
         metadata.kind === 'template' &&
         typeof metadata.templateId === 'string'
       ) {
-        const tpl = getTemplate(db, metadata.templateId);
+        const tpl = metadata.group
+            ? await __getTemplate(metadata.group)
+            : getTemplate(db, metadata.templateId);
         if (tpl && Array.isArray(tpl.files) && tpl.files.length > 0) {
           await ensureProject(PROJECTS_DIR, id, projectMetadata);
           for (const f of tpl.files) {

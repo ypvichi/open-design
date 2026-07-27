@@ -1,3 +1,4 @@
+import { preCache, snapdom } from '@zumer/snapdom';
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { Button, Input, Select } from '@open-design/components';
@@ -9683,7 +9684,7 @@ function HtmlViewer({
       let fileData = file as any;
       const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
       const fileName = fileData.name;
-      const resp = await fetch(`${AI_BUILDER_WEB_PREX}/webapi/v1/od/plugin/${projectId}/${fileName}`,{
+      const resp = await fetch(`${AI_BUILDER_WEB_PREX}/webapi/v1/od/template/${projectId}/${fileName}`,{
         method:"GET"
       });
       if(resp?.ok){
@@ -9709,48 +9710,68 @@ function HtmlViewer({
     let fileData = file as any;
     const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
     const fileName = fileData.name;
-    //console.log('工程Id是',projectId,'文件名是',fileName)
-    fetchProjectFileText(projectId,fileName).then(async (text) => {
-        const html = text;
-        const params:any = {
-            projectId,
-            fileName,
-            html
-        }
-        if(iuxLink){
-           params.isDelete=true;
-        }
-        const resp = await fetch(`${AI_BUILDER_WEB_PREX}/webapi/v1/od/plugin`,{
-            method:"POST",
-            body: JSON.stringify(params),
-            headers: {
-              "Content-Type":"application/json"
+    const files = await fetchProjectFiles(projectId);
+    let name = fileName;
+    const htmlFiles = files
+      .filter((entry) => /\.html?$/i.test(entry.name))
+      .filter(f=>f.name===fileName)
+      .map(f=>{
+      let isHome=f.name===fileName;
+      let obj:any = {};
+      if(isHome){
+        obj.home=true;
+      }
+      obj.name=f.name;
+      return new Promise(async (resolve)=>{
+            let content = await fetchProjectFileText(projectId,f.name)
+            obj.content = content;
+            if(isHome){
+              obj.home=true;
+              const titleMatch:any = content?.match(/<title>([\s\S]*?)<\/title>/i);
+              name = titleMatch ? titleMatch[1].trim() : f.name;
+              // if(urlPreviewIframeRef.current){
+              //    const pngImage = await snapdom.toPng(urlPreviewIframeRef.current?.contentWindow?.document?.body as Element);
+              //    const base64Url = pngImage.getAttribute('src');
+              //    console.log(base64Url)
+              // }
             }
-        });
-        const cancelLabel = iuxLink?'取消':'';
-        if (resp.ok){
-          setExportToast({
-            message:cancelLabel+'发布成功!',
-            tone: 'success',
-          });
-          if(!iuxLink){
-            let result = await resp.json();
-            let lastUrl = `${AI_BUILDER_WEB_PREX}${result.data.path}`
-            setIuxLink(lastUrl);
-          }else{
-            setIuxLink('');
-          }
-        }else{
-          setExportToast({
-            message:cancelLabel+'发布失败!',
-            tone: 'error',
-          });
+            resolve(obj);
+      });
+    })
+    Promise.all(htmlFiles).then(async files=>{
+      const params:any = {
+        sourceProjectId:projectId,
+        name,
+        files
+      }
+      console.log('params',params,fileData);
+      const resp = await fetch(`${AI_BUILDER_WEB_PREX}/webapi/v1/od/template`,{
+        method:"POST",
+        body: JSON.stringify(params),
+        headers: {
+          "Content-Type":"application/json"
         }
-        setDeploying(false);
-        //setDeployModalOpen(false);
-    }).catch(e=>{
-        setDeploying(false);
-        //setDeployModalOpen(false);
+      });
+      const cancelLabel = '';//iuxLink?'取消':'';
+      if (resp.ok){
+        setExportToast({
+          message:cancelLabel+'发布成功!',
+          tone: 'success',
+        });
+        //if(!iuxLink){
+          let result = await resp.json();
+          let lastUrl = `${AI_BUILDER_WEB_PREX}${result.data.path}`
+          setIuxLink(lastUrl);
+        // }else{
+        //   setIuxLink('');
+        // }
+      }else{
+        setExportToast({
+          message:cancelLabel+'发布失败!',
+          tone: 'error',
+        });
+      }
+      setDeploying(false);
     })
   }
   async function deployToSelectedProvider() {
@@ -13008,7 +13029,7 @@ function HtmlViewer({
           <div className="modal deploy-modal deploy-flow-modal" role="dialog" aria-modal="true">
             <div className="deploy-flow-modal__scroll">
               <div className="modal-head">
-                <div className="kicker">{deployModalKicker}</div>
+                {/* <div className="kicker">{deployModalKicker}</div> */}
                 <h2>发布到 IUX Group</h2>
                 <p className="subtitle">
                   把HTML文件发布到公司内网平台，方便在线分享预览
@@ -13084,7 +13105,7 @@ function HtmlViewer({
                   //void deployToSelectedProvider();
                 }}
               >
-                {deploying?`正在${iuxLink?'取消':''}发布`:`${iuxLink?'取消':''}发布`}
+                {deploying?`正在发布`:`${iuxLink?'重新':''}发布`}
               </button>
             </div>
           </div>

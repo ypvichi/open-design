@@ -43,7 +43,7 @@ function sinkToBottom(list: InstalledPluginRecord[]): InstalledPluginRecord[] {
 export type FilterMode = 'all' | 'saved' | 'iux';
 
 interface UsePluginFacetsArgs {
-  iuxPlugins?: InstalledPluginRecord[];
+  iuxTemplates?: unknown[];
   plugins: InstalledPluginRecord[];
   savedPluginIds?: ReadonlySet<string>;
   preferDefaultFacet?: boolean;
@@ -53,7 +53,7 @@ interface UsePluginFacetsArgs {
 export interface UsePluginFacetsResult {
   visiblePlugins: InstalledPluginRecord[];
   savedList: InstalledPluginRecord[];
-  filtered: InstalledPluginRecord[];
+  filtered: InstalledPluginRecord[] | any;
   catalog: FacetCatalog;
   selection: FacetSelection;
   pickCategory: (slug: string | null) => void;
@@ -75,7 +75,7 @@ const EMPTY_SELECTION: FacetSelection = {
 };
 
 export function usePluginFacets({
-  iuxPlugins,
+  iuxTemplates,
   plugins,
   savedPluginIds,
   preferDefaultFacet = true,
@@ -109,14 +109,6 @@ export function usePluginFacets({
         plugins.filter((p) => p.manifest?.od?.kind !== 'atom'),
       ),
     [plugins],
-  );
-
-  const visibleIuxPlugins = useMemo(
-    () =>
-      sortByVisualAppeal(
-        iuxPlugins||[],
-      ),
-    [iuxPlugins],
   );
 
   // Re-rank for the "newest" order on top of the visual-appeal base:
@@ -157,7 +149,7 @@ export function usePluginFacets({
   // cross-facet usage jumble. Array#sort is stable, so ties keep master order.
   const filtered = useMemo(() => {
     if(mode === 'iux'){
-      return filterByQuery(visibleIuxPlugins, query, locale);
+      return iuxTemplates||[];//lterByQuery(visibleIuxPlugins, query, locale);
     }
     if (mode === 'saved') return filterByQuery(savedList, query, locale);
     // Facet selection runs on `orderedPlugins` so the user's hot/newest sort
@@ -180,7 +172,7 @@ export function usePluginFacets({
     }
     
     return filterByQuery(base, query, locale);
-  }, [mode, savedList, orderedPlugins, selection, query, locale, sortOrder]);
+  }, [iuxTemplates,mode, savedList, orderedPlugins, selection, query, locale, sortOrder]);
 
   function pickCategory(slug: string | null): void {
     if (mode !== 'all') setMode('all');

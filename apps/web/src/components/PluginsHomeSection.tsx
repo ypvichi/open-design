@@ -30,6 +30,11 @@ import type { PluginSortOrder } from './plugins-home/sortOrder';
 import type { PluginUseAction } from './plugins-home/useActions';
 import { Toast } from './Toast';
 import { AnimatePresence } from 'motion/react';
+import { AI_BUILDER_WEB_PREX } from './workspace-context';
+
+import {
+  HtmlProjectCoverFrame
+} from "./project-cover";
 
 const RICH_PLUGIN_RENDER_LIMIT = 60;
 const RICH_PLUGIN_RENDER_BATCH_SIZE = 60;
@@ -37,13 +42,14 @@ const GALLERY_PLUGIN_RENDER_LIMIT = 12;
 const GALLERY_PLUGIN_RENDER_BATCH_SIZE = 12;
 
 interface Props {
-  iuxPlugins?: InstalledPluginRecord[];
+  iuxTemplates?: unknown[];
   plugins: InstalledPluginRecord[];
   loading: boolean;
   activePluginId: string | null;
   pendingApplyId: string | null;
   pendingDuplicateId?: string | null;
   pendingShareAction?: { pluginId: string; action: PluginShareAction } | null;
+  onCreateProject: (input: any) => Promise<boolean> | boolean | void;
   onUse: (record: InstalledPluginRecord, action: PluginUseAction) => void;
   onDuplicate?: (record: InstalledPluginRecord) => void;
   onOpenDetails: (record: InstalledPluginRecord) => void;
@@ -62,13 +68,14 @@ interface Props {
 }
 
 export function PluginsHomeSection({
-  iuxPlugins,
+  iuxTemplates,
   plugins,
   loading,
   activePluginId,
   pendingApplyId,
   pendingDuplicateId = null,
   pendingShareAction = null,
+  onCreateProject,
   onUse,
   onDuplicate,
   onOpenDetails,
@@ -107,7 +114,7 @@ export function PluginsHomeSection({
     setSortOrder,
     totalVisible,
   } = usePluginFacets({
-    iuxPlugins,
+    iuxTemplates,
     plugins,
     savedPluginIds,
     preferDefaultFacet: cardLayout === 'gallery' ? false : preferDefaultFacet,
@@ -242,12 +249,29 @@ export function PluginsHomeSection({
                 {t('pluginsHome.clearFilters')}
               </button>
             </div>
+          ) : filtered?.[0].files ? (
+            <div
+              className={`plugins-home__grid${cardLayout === 'gallery' ? ' plugins-home__grid--gallery' : ''}`}
+              role="list"
+            >
+              {renderedPlugins.map((t: any) => (
+                <TemplateCard
+                  key={t.id}
+                  record={t}
+                  isActive={activePluginId === t.id}
+                  onCreateProject={onCreateProject}
+                  onOpenDetails={onOpenDetails}
+                  onSave={handleSavePlugin}
+                  layout={cardLayout}
+                />
+              ))}
+            </div>
           ) : (
             <div
               className={`plugins-home__grid${cardLayout === 'gallery' ? ' plugins-home__grid--gallery' : ''}`}
               role="list"
             >
-              {renderedPlugins.map((p) => (
+              {renderedPlugins.map((p: any) => (
                 <PluginCard
                   key={p.id}
                   record={p}
@@ -275,7 +299,9 @@ export function PluginsHomeSection({
                 />
               ) : null}
             </div>
-          )}
+
+          )
+          }
         </>
       )}
       <AnimatePresence>
@@ -371,7 +397,7 @@ function CategoryRow({
             <span className="plugins-home__chip-count">{iuxCount}</span>
           </button>
         ) : null}
-        {!showIux&&showSaved ? (
+        {!showIux && showSaved ? (
           <button
             type="button"
             className={[
@@ -617,5 +643,203 @@ function SearchInput({ value, onChange }: SearchInputProps) {
         </Button>
       ) : null}
     </div>
+  );
+}
+
+// ------------------------------------------------------------------
+// Template card (mirrors PluginCard for template records with `files`)
+// ------------------------------------------------------------------
+
+interface TemplateRecord {
+  id: string;
+  name: string;
+  sourceProjectId: string;
+  files: Array<{ name: string }>;
+  createdAt: number;
+}
+
+interface TemplateCardProps {
+  record: TemplateRecord;
+  isActive: boolean;
+  onCreateProject: (input: any) => Promise<boolean> | boolean | void;
+  onOpenDetails?: (record: any) => void;
+  onSave?: (record: any) => void;
+  layout?: 'rich' | 'gallery';
+}
+
+function TemplateCard({
+  record,
+  isActive,
+  onCreateProject,
+  onOpenDetails,
+  onSave,
+  layout = 'rich',
+}: TemplateCardProps) {
+  const { t } = useI18n();
+  const title = record.name;
+  const fileCount = record.files.length;
+  const homeFile: any =
+    record.files?.find((f: any) => f.home) || record.files?.[0]
+  function handleCreateIuxTemplate() {
+    const input = {
+      "name": record.name,
+      "skillId": null,
+      "designSystemId": "default",
+      "metadata": {
+        "kind": "template",
+        "platform": "responsive",
+        "platformTargets": [
+          "responsive"
+        ],
+        "animations": false,
+        "templateId": record.id,
+        "templateLabel": record.name,
+        "nameSource": "user",
+        "group":"iux"
+      },
+      "pluginId": "od-new-generation",
+      "pluginInputs": {
+        "artifactKind": "artifact based on a saved template",
+        "audience": "product and design reviewers",
+        "topic": record.name
+      }
+    }
+    onCreateProject(input);
+    console.log('我拿到创建函数参数了吗？', input);
+  }
+  if (layout === 'gallery') {
+    return (
+      <article
+        role="listitem"
+        className={[
+          'plugins-home__card',
+          'plugins-home__card--gallery',
+          isActive ? 'is-active' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        data-template-id={record.id}
+        onClick={() => {
+          //onOpenDetails?.(record)
+        }
+        }
+      >
+        <div className="recent-projects__card-thumb">
+          {/* <div className="plugins-home__gallery-preview-placeholder">
+            <Icon name="file" size={24} />
+            <span className="plugins-home__gallery-preview-label">
+              {fileCount} files
+            </span>
+          </div> */}
+          <HtmlProjectCoverFrame
+            src={AI_BUILDER_WEB_PREX + homeFile.path}
+            initial={homeFile.initial}
+            iframeClassName="recent-projects__thumb-iframe"
+            glyphClassName="project-thumb-glyph"
+            diagnostic="unknown"
+          />
+          <div className="plugins-home__gallery-actions"
+            style={{ justifyContent: 'center' }}
+          >
+            <button
+              style={{ width: "50%", flex: 'none' }}
+              type="button"
+              className="plugins-home__action plugins-home__action--primary"
+              onClick={(event) => {
+                event.stopPropagation();
+                //pickUseAction('use');
+                handleCreateIuxTemplate();
+              }}
+            >
+              <Icon name={'play'} size={12} />
+              <span>立刻使用</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="plugins-home__gallery-bar">
+          <div className="plugins-home__gallery-bar-row">
+            <span className="plugins-home__gallery-dot" aria-hidden />
+            <button
+              type="button"
+              className="plugins-home__gallery-name"
+              title={title}
+              onClick={(event) => {
+                event.stopPropagation();
+                //onOpenDetails?.(record);
+              }}
+            >
+              {title}
+            </button>
+          </div>
+          <p className="plugins-home__gallery-desc" title={record.name}>
+            {record.name}
+          </p>
+        </div>
+      </article>
+    );
+  }
+
+  return (
+    <article
+      role="listitem"
+      className={[
+        'plugins-home__card',
+        isActive ? 'is-active' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      data-template-id={record.id}
+    >
+      <div className="plugins-home__card-overlay">
+        <div className="plugins-home__card-overlay-top">
+          <span className="plugins-home__overlay-title" title={title}>
+            {title}
+          </span>
+        </div>
+        <div className="plugins-home__card-overlay-body">
+          <p className="plugins-home__overlay-desc">
+            {homeFile.name}
+            {fileCount > 1 ? ` +${fileCount - 1}` : ''}
+          </p>
+        </div>
+        <div className="plugins-home__overlay-actions">
+          <button
+            type="button"
+            className="plugins-home__action plugins-home__action--secondary"
+            onClick={() =>
+              onOpenDetails?.(record as unknown as InstalledPluginRecord)
+            }
+          >
+            <Icon name="eye" size={12} />
+            <span>{t('pluginCard.details')}</span>
+          </button>
+          <button
+            type="button"
+            className="plugins-home__action plugins-home__action--primary"
+            onClick={() =>
+              onOpenDetails?.(record as unknown as InstalledPluginRecord)
+            }
+          >
+            <Icon name="play" size={12} />
+            <span>{t('pluginCard.use')}</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="plugins-home__card-foot">
+        <button
+          type="button"
+          className="plugins-home__card-save"
+          onClick={() => onSave?.(record as unknown as InstalledPluginRecord)}
+          aria-label={t('common.save')}
+        >
+          <Icon name="star" size={12} />
+        </button>
+        <span className="plugins-home__card-title" title={title}>
+          <span className="plugins-home__card-title-text">{title}</span>
+        </span>
+      </div>
+    </article>
   );
 }
