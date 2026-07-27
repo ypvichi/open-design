@@ -684,7 +684,7 @@ function TemplateCard({
     const input = {
       "name": record.name,
       "skillId": null,
-      "designSystemId": "default",
+      "designSystemId": null,//"default",
       "metadata": {
         "kind": "template",
         "platform": "responsive",
