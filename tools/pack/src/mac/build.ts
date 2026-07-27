@@ -1,13 +1,18 @@
+import { cp, mkdir } from "node:fs/promises";
+import { join } from "node:path";
+
 import { ToolPackCache } from "../cache.js";
 import type { ToolPackConfig } from "../config.js";
 import { collectWorkspaceTarballs, copyResourceTree, writeAssembledApp } from "./app.js";
 import { seedPackagedAppConfig } from "./app-config.js";
 import { finalizeMacArtifacts } from "./artifacts.js";
 import { resolveElectronBuilderTargets, runElectronBuilder } from "./builder.js";
+import { PRODUCT_NAME } from "./constants.js";
 import { scrubMacExtendedAttributes } from "./fs.js";
 import { createMacLauncherPayloadArchive } from "./payload.js";
 import { resolveMacPaths } from "./paths.js";
 import { collectMacSizeReport } from "./report.js";
+import { readPackagedVersion } from "./manifest.js";
 import type { MacBuildOutput, MacPackResult, MacPackTiming } from "./types.js";
 import { ensureMacWorkspaceBuild } from "./workspace.js";
 
@@ -64,6 +69,19 @@ export async function packMac(config: ToolPackConfig): Promise<MacPackResult> {
   const payloadPath = await runPhase("payload-artifact", async () => createMacLauncherPayloadArchive(config, paths));
   const artifacts = await runPhase("artifacts", async () => finalizeMacArtifacts(config, paths));
   const sizeReport = await runPhase("size-report", async () => collectMacSizeReport(config, paths, artifacts, targets));
+
+  // Copy final artifacts to workspace .output/
+  const outputDir = join(config.workspaceRoot, ".output");
+  await mkdir(outputDir, { recursive: true });
+  const version = await readPackagedVersion(config);
+  if (artifacts.dmgPath != null) {
+    const outputDmgName = `${PRODUCT_NAME}-${version}.dmg`;
+    await cp(artifacts.dmgPath, join(outputDir, outputDmgName), { force: true });
+  }
+  if (artifacts.zipPath != null) {
+    const outputZipName = `${PRODUCT_NAME}-${version}.zip`;
+    await cp(artifacts.zipPath, join(outputDir, outputZipName), { force: true });
+  }
 
   return {
     appPath: paths.appPath,

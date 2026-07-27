@@ -718,6 +718,14 @@ export async function packLinux(config: ToolPackConfig): Promise<LinuxPackResult
     await runBuildInContainer(config);
     const paths = resolveLinuxPaths(config);
     const appImagePath = config.to === "dir" ? null : await findBuiltAppImage(paths);
+    // Copy final artifact to workspace .output/
+    if (appImagePath != null) {
+      const outputDir = join(config.workspaceRoot, ".output");
+      await mkdir(outputDir, { recursive: true });
+      const linuxVersion = await readPackagedVersion(config);
+      const outputAppImageName = `Open-Design-${linuxVersion}.AppImage`;
+      await cp(appImagePath, join(outputDir, outputAppImageName), { force: true });
+    }
     return {
       appImagePath,
       outputRoot: paths.appBuilderOutputRoot,
@@ -741,6 +749,14 @@ export async function packLinux(config: ToolPackConfig): Promise<LinuxPackResult
   await runElectronBuilderLinux(config, paths);
 
   const appImagePath = config.to === "dir" ? null : await findBuiltAppImage(paths);
+  // Copy final artifact to workspace .output/
+  if (appImagePath != null) {
+    const outputDir = join(config.workspaceRoot, ".output");
+    await mkdir(outputDir, { recursive: true });
+    const linuxVersion = await readPackagedVersion(config);
+    const outputAppImageName = `Open-Design-${linuxVersion}.AppImage`;
+    await cp(appImagePath, join(outputDir, outputAppImageName), { force: true });
+  }
   return {
     appImagePath,
     outputRoot: paths.appBuilderOutputRoot,

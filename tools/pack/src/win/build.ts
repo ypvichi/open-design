@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import { ToolPackCache } from "../cache.js";
@@ -137,6 +137,20 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
     });
   }
   const sizeReport = await runPhase("size-report", async () => collectWinSizeReport(config, paths, builtApp));
+
+  // Copy final artifacts to workspace .output/
+  const outputDir = join(config.workspaceRoot, ".output");
+  await mkdir(outputDir, { recursive: true });
+  const winVersion = await readPackagedVersion(config);
+  if (hasNsisTarget && (await pathExists(paths.setupPath))) {
+    const outputExeName = `${PRODUCT_NAME}-IUX-setup-${winVersion}.exe`;
+    await cp(paths.setupPath, join(outputDir, outputExeName), { force: true });
+  }
+  if (hasZipTarget && (await pathExists(paths.setupZipPath))) {
+    const outputZipName = `${PRODUCT_NAME}-IUX-setup-${winVersion}.zip`;
+    await cp(paths.setupZipPath, join(outputDir, outputZipName), { force: true });
+  }
+
   return {
     blockmapPath: (await pathExists(paths.blockmapPath)) ? paths.blockmapPath : null,
     installerPath: hasNsisTarget && await pathExists(paths.setupPath) ? paths.setupPath : null,
