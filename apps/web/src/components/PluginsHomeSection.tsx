@@ -678,9 +678,10 @@ function TemplateCard({
   const { t } = useI18n();
   const title = record.name;
   const fileCount = record.files.length;
+  const isFinished = useRef(false);
   const homeFile: any =
     record.files?.find((f: any) => f.home) || record.files?.[0]
-  function handleCreateIuxTemplate() {
+  async function handleCreateIuxTemplate() {
     const input = {
       "name": record.name,
       "skillId": null,
@@ -704,8 +705,10 @@ function TemplateCard({
         "topic": record.name
       }
     }
-    onCreateProject(input);
-    console.log('我拿到创建函数参数了吗？', input);
+    isFinished.current = true;
+    let status = await onCreateProject(input);
+    isFinished.current = false;
+    // console.log('我拿到创建函数参数了吗？', input);
   }
   if (layout === 'gallery') {
     return (
@@ -745,14 +748,15 @@ function TemplateCard({
               style={{ width: "50%", flex: 'none' }}
               type="button"
               className="plugins-home__action plugins-home__action--primary"
+              disabled={isFinished.current}
               onClick={(event) => {
                 event.stopPropagation();
                 //pickUseAction('use');
                 handleCreateIuxTemplate();
               }}
             >
-              <Icon name={'play'} size={12} />
-              <span>立刻使用</span>
+              <Icon name={isFinished.current ? 'spinner' : 'play'} size={12} />
+              <span>{isFinished.current?'正在创建':'立刻使用'}</span>
             </button>
           </div>
         </div>
