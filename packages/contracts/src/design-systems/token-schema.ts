@@ -252,6 +252,11 @@ export const BRAND_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
  */
 export const BRAND_EXTENSION_PREFIXES: readonly string[] = [
   "--tag-bg-",
+  // HUI (Hikvision) ships its full native design-token set verbatim under the
+  // `--h-` namespace (colors, sizes, radii, spacing, type, shadows). These are
+  // brand-native tokens consumed by HUI components; shared cross-brand
+  // components must not reference them. See design-systems/hui/DESIGN.md.
+  "--h-",
 ];
 
 /**
