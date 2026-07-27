@@ -24,6 +24,7 @@ import {
   collectProcessTreePids,
   createPackageManagerInvocation,
   createProcessStampArgs,
+  isProcessAlive,
   listProcessSnapshots,
   matchesStampedProcess,
   readLogTail,
@@ -699,7 +700,11 @@ async function startDaemon(
 
   const spawned = await spawnDaemonRuntime(config, options, { requireDesktopAuth });
   try {
-    const status = await waitForDaemonRuntime(runtimeLookup(config));
+    const status = await waitForDaemonRuntime(
+      runtimeLookup(config),
+      undefined,
+      () => isProcessAlive(spawned.pid),
+    );
     return {
       app: APP_KEYS.DAEMON,
       created: true,
@@ -728,7 +733,11 @@ async function startWeb(config: ToolDevConfig, options: CliOptions) {
 
   const spawned = await spawnWebRuntime(config, options);
   try {
-    const status = await waitForWebRuntime(runtimeLookup(config));
+    const status = await waitForWebRuntime(
+      runtimeLookup(config),
+      undefined,
+      () => isProcessAlive(spawned.pid),
+    );
     return {
       app: APP_KEYS.WEB,
       created: true,
@@ -753,7 +762,11 @@ async function startDesktop(config: ToolDevConfig, options: CliOptions) {
 
   const spawned = await spawnDesktopRuntime(config, options);
   try {
-    const status = await waitForDesktopRuntime(runtimeLookup(config));
+    const status = await waitForDesktopRuntime(
+      runtimeLookup(config),
+      undefined,
+      () => isProcessAlive(spawned.pid),
+    );
     return {
       app: APP_KEYS.DESKTOP,
       created: true,

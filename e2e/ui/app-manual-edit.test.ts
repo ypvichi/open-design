@@ -177,6 +177,9 @@ async function selectPreviewElementThroughBridge(
     await frame.locator(selector).click({ timeout: 5_000 });
     await expect(frame.locator(`${selector}[data-od-edit-selected="true"]`)).toHaveCount(1, { timeout: 2_000 });
   }).toPass({ timeout: 30_000 });
+  // Element clicks raise only the lightweight selection chrome; the full
+  // inspector opens through the action bar's "Edit parameters" button.
+  await page.getByTestId('manual-edit-open-inspector').click();
   await expect(page.locator('.manual-edit-modal')).toContainText(section);
 }
 
@@ -354,6 +357,9 @@ test('[P1] HTML preview toolbar exposes screenshot, comments, mark, and edit wor
 
   await page.getByTestId('board-mode-toggle').click();
   await expect(page.getByTestId('board-mode-toggle')).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    artifactPreviewFrame(page).locator('html[data-od-comment-mode][data-od-comment-mode-kind="picker"]'),
+  ).toHaveCount(1);
   await artifactPreviewFrame(page).locator('[data-od-id="hero-title"]').click();
   await expect(page.getByTestId('comment-popover')).toBeVisible();
   await page.getByTestId('comment-popover-input').fill('Panel-level comment');
@@ -374,7 +380,13 @@ test('[P1] HTML preview toolbar exposes screenshot, comments, mark, and edit wor
   await expect(page.getByTestId('draw-overlay-toggle')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: 'Box select' })).toBeVisible();
   await page.getByPlaceholder('Add a note for this mark').fill('Mark this hero crop');
-  await expect(page.getByRole('button', { name: 'Add to input' })).toBeEnabled();
+  const submitOptionsButton = page.getByRole('button', { name: 'Submit options' });
+  await expect(submitOptionsButton).toBeEnabled();
+  await submitOptionsButton.click();
+  const submitOptionsMenu = page.getByRole('menu', { name: 'Submit options' });
+  await expect(submitOptionsMenu.getByRole('menuitemradio', { name: 'Add to input' })).toBeEnabled();
+  await submitOptionsButton.click();
+  await expect(submitOptionsMenu).toHaveCount(0);
 
   const previewBox = await artifactPreview(page).boundingBox();
   expect(previewBox).not.toBeNull();
@@ -382,9 +394,10 @@ test('[P1] HTML preview toolbar exposes screenshot, comments, mark, and edit wor
   await page.mouse.down();
   await page.mouse.move(previewBox!.x + 220, previewBox!.y + 170);
   await page.mouse.up();
-  const queueButton = page.getByRole('button', { name: 'Queue' });
-  await expect(queueButton).toBeEnabled();
-  await queueButton.click();
+  await submitOptionsButton.click();
+  const queueOption = submitOptionsMenu.getByRole('menuitemradio', { name: 'Queue' });
+  await expect(queueOption).toBeEnabled();
+  await queueOption.click();
   const queuedStrip = page.getByTestId('chat-queued-send-strip');
   await expect(queuedStrip).toBeVisible();
   await expect(queuedStrip).toContainText('Mark this hero crop');
@@ -609,6 +622,9 @@ async function selectStyleRowInput(
       },
     }, '*');
   });
+  // Selection posts raise only the lightweight chrome; open the inspector
+  // through the action bar's "Edit parameters" button before reading rows.
+  await page.getByTestId('manual-edit-open-inspector').click();
   await expect(page.locator('.manual-edit-modal')).toContainText('TYPOGRAPHY');
   const row = inspectorSection(page, section).locator('.cc-row').filter({ hasText: label }).locator('input');
   await expect(row).toBeVisible();

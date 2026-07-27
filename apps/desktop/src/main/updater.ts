@@ -28,20 +28,23 @@ import {
 import {
   LAUNCHER_SCHEMA_VERSION,
   buildLauncherAfterQuitArgs,
+  buildLauncherDelegatedArgs,
   compareLauncherVersions,
   resolveLauncherPaths,
   resolveLauncherVersionPaths,
+  validateLauncherAttemptDescriptor,
   validateLauncherCleanupDescriptor,
   validateLauncherRuntimeDescriptor,
   type LauncherCleanupDescriptor,
   type LauncherCleanupEntry,
+  type LauncherAttemptDescriptor,
   type LauncherRuntimeDescriptor,
 } from "@open-design/launcher-proto";
 import {
+  DESKTOP_UPDATE_ACTIONS,
   DESKTOP_UPDATE_CHANNELS,
   DESKTOP_UPDATE_MODES,
   DESKTOP_UPDATE_STATES,
-  SIDECAR_SOURCES,
   type DesktopUpdateAction,
   type DesktopUpdateArtifactSnapshot,
   type DesktopUpdateCacheLifecycleSummary,
@@ -52,39 +55,38 @@ import {
   type DesktopUpdateReleaseLifecycleState,
   type DesktopUpdateMode,
   type DesktopUpdateProgressSnapshot,
+  type DesktopUpdateReinstallSnapshot,
   type DesktopUpdateStatusSnapshot,
   type DesktopUpdateState,
   type SidecarSource,
 } from "@open-design/sidecar-proto";
-import { releaseChannelFromVersion } from "@open-design/release";
-
 import {
   markInstallerObservationOpenFailed,
   writePendingInstallerObservation,
   type InstallerObservationArtifactType,
   type InstallerObservationHandle,
 } from "./installer-observations.js";
+import {
+  capabilitiesFor,
+  isDesktopUpdateChannel,
+  isSupportedPackageLauncherPlatform,
+  normalizeDownloadRoot,
+  resolveDesktopUpdaterConfig,
+  type DesktopUpdaterConfig,
+  type DesktopUpdaterConfigInput,
+} from "./updater/config.js";
 
-export const DESKTOP_UPDATE_ENV = Object.freeze({
-  ARCH: "OD_UPDATE_ARCH",
-  AUTO_CHECK: "OD_UPDATE_AUTO_CHECK",
-  AUTO_DOWNLOAD: "OD_UPDATE_AUTO_DOWNLOAD",
-  AUTO_OPEN: "OD_UPDATE_AUTO_OPEN",
-  CHECK_BACKOFF_INITIAL_MS: "OD_UPDATE_CHECK_BACKOFF_INITIAL_MS",
-  CHECK_BACKOFF_MAX_MS: "OD_UPDATE_CHECK_BACKOFF_MAX_MS",
-  CHECK_INITIAL_DELAY_MS: "OD_UPDATE_CHECK_INITIAL_DELAY_MS",
-  CHECK_INTERVAL_MS: "OD_UPDATE_CHECK_INTERVAL_MS",
-  CHANNEL: "OD_UPDATE_CHANNEL",
-  CURRENT_VERSION: "OD_UPDATE_CURRENT_VERSION",
-  DOWNLOAD_ROOT: "OD_UPDATE_DOWNLOAD_ROOT",
-  ENABLED: "OD_UPDATE_ENABLED",
-  METADATA_URL: "OD_UPDATE_METADATA_URL",
-  MODE: "OD_UPDATE_MODE",
-  OPEN_DRY_RUN: "OD_UPDATE_OPEN_DRY_RUN",
-  PLATFORM: "OD_UPDATE_PLATFORM",
-} as const);
+export {
+  DESKTOP_UPDATE_ENV,
+  resolveDesktopUpdaterConfig,
+  type DesktopUpdaterConfig,
+  type DesktopUpdaterConfigInput,
+} from "./updater/config.js";
+export {
+  createDesktopUpdaterScheduler,
+  type DesktopUpdaterScheduler,
+} from "./updater/scheduler.js";
 
-const DEFAULT_RELEASE_ORIGIN = "https://releases.open-design.ai";
 const OWNERSHIP_SENTINEL = ".open-design-updater-root.json";
 const STORE_METADATA_FILE = "metadata.json";
 const RELEASES_DIR = "releases";
@@ -99,62 +101,10 @@ const LOCK_OWNER_FILE = "owner.json";
 const UPDATE_ROOT_VERSION = 1;
 const STORE_METADATA_VERSION = 1;
 const RELEASE_CLEANUP_DESCRIPTOR_VERSION = 1;
-const BETA_POLL_INTERVAL_MS = 15 * 60 * 1000;
-const STABLE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
-const DEFAULT_POLL_INITIAL_DELAY_MS = 5000;
-const DEFAULT_POLL_BACKOFF_INITIAL_MS = 60 * 1000;
-const DEFAULT_POLL_BACKOFF_MAX_MS = 30 * 60 * 1000;
-const MIN_SCHEDULED_POLL_DELAY_MS = 1000;
-const MAC_DEFERRED_INSTALLER_TIMEOUT_MS = 10 * 60 * 1000;
-const WINDOWS_DEFERRED_INSTALLER_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFERRED_INSTALLER_TIMEOUT_MS = 10 * 60 * 1000;
 const ARTIFACT_DOWNLOAD_MAX_ATTEMPTS = 3;
-const DESKTOP_UPDATE_CHANNEL_VALUES = new Set<string>(Object.values(DESKTOP_UPDATE_CHANNELS));
 const execFileAsync = promisify(execFile);
 const MAC_PAYLOAD_XATTRS_TO_SCRUB = ["com.apple.quarantine", "com.apple.provenance", "com.apple.macl"] as const;
-
-export type DesktopUpdaterConfigInput = {
-  appVersion?: string | null;
-  arch?: string;
-  currentVersion?: string | null;
-  downloadRoot?: string | null;
-  env?: NodeJS.ProcessEnv;
-  launcherLaunchPath?: string | null;
-  launcherRoot?: string | null;
-  launcherPayloadExtractorPath?: string | null;
-  installerObservationRoot?: string | null;
-  launcherRuntimePath?: string | null;
-  mode?: DesktopUpdateMode;
-  namespace?: string | null;
-  platform?: string;
-  runtimeBase?: string | null;
-  source: SidecarSource;
-};
-
-export type DesktopUpdaterConfig = {
-  arch: string;
-  autoCheck: boolean;
-  autoDownload: boolean;
-  autoOpen: boolean;
-  checkBackoffInitialMs: number;
-  checkBackoffMaxMs: number;
-  checkInitialDelayMs: number;
-  checkIntervalMs: number;
-  channel: DesktopUpdateChannel;
-  currentVersion: string;
-  downloadRoot: string;
-  enabled: boolean;
-  installerObservationRoot?: string;
-  launcherLaunchPath?: string;
-  launcherRoot?: string;
-  launcherPayloadExtractorPath?: string;
-  launcherRuntimePath?: string;
-  metadataUrl: string;
-  mode: DesktopUpdateMode;
-  namespace?: string;
-  openDryRun: boolean;
-  platform: string;
-  source: SidecarSource;
-};
 
 export type DesktopUpdaterDeps = {
   extractLauncherPayloadArchive?: (input: LauncherPayloadExtractInput) => Promise<void>;
@@ -177,9 +127,9 @@ export type LauncherPayloadExtractInput = {
   platform: string;
 };
 
-type DesktopUpdaterLogger = Pick<Console, "error" | "warn"> & Partial<Pick<Console, "info">>;
-type DetachedProcess = { unref(): void };
-type LauncherPayloadCleanupTrigger = "activate" | "prepare-existing" | "prepare-promoted";
+export type DesktopUpdaterLogger = Pick<Console, "error" | "warn"> & Partial<Pick<Console, "info">>;
+type DetachedProcess = Pick<ReturnType<typeof spawn>, "once" | "unref">;
+type LauncherPayloadCleanupTrigger = "activate" | "manual-clear" | "prepare-existing" | "prepare-promoted";
 type LauncherPayloadCleanupFailure = {
   error: NonNullable<LauncherCleanupEntry["error"]>;
   version: string;
@@ -187,11 +137,13 @@ type LauncherPayloadCleanupFailure = {
 type SpawnInstallerHelper = (
   command: string,
   args: string[],
-  options: { detached?: true; stdio: "ignore"; windowsHide: true },
+  options: { cwd?: string; detached?: true; stdio: "ignore"; windowsHide: true },
 ) => DetachedProcess;
 
 export type DeferredInstallerLaunchInput = {
   appPid: number;
+  /** Stable namespace root inherited by the installer helper process. */
+  cwd: string;
   installerPath: string;
   root: string;
   timeoutMs: number;
@@ -199,6 +151,14 @@ export type DeferredInstallerLaunchInput = {
 
 export type DeferredAppLaunchInput = {
   appPid: number;
+  /** Stable namespace root inherited by the next payload process. */
+  cwd: string;
+  /**
+   * Pointer the activation pre-armed attempt.json for; passed to the spawned
+   * payload as `--od-launcher-delegated-*` so it recognizes that attempt as
+   * its own launch in progress rather than a previous failure.
+   */
+  delegated?: { generation: number; version: string };
   launchPath: string;
   root: string;
   timeoutMs: number;
@@ -286,6 +246,7 @@ type DesktopUpdaterStoreLayout = {
 type ReleaseCleanupReason =
   | "cleanup-failed"
   | "current-version-or-newer"
+  | "manual-clear"
   | "metadata-invalid"
   | "metadata-missing"
   | "older-than-current-version";
@@ -325,6 +286,7 @@ type LauncherCleanupLifecycleSummary = {
 
 export type DesktopUpdater = {
   checkForUpdates(options?: ActionOptions): Promise<DesktopUpdateStatusSnapshot>;
+  clearCache(): Promise<DesktopUpdateStatusSnapshot>;
   config: DesktopUpdaterConfig;
   downloadUpdate(): Promise<DesktopUpdateStatusSnapshot>;
   handle(action: DesktopUpdateAction): Promise<DesktopUpdateStatusSnapshot>;
@@ -334,167 +296,6 @@ export type DesktopUpdater = {
   status(): Promise<DesktopUpdateStatusSnapshot>;
   subscribe(listener: () => void): () => void;
 };
-
-export type DesktopUpdaterScheduler = {
-  isRunning(): boolean;
-  start(): void;
-  stop(reason?: string): void;
-};
-
-type StartupSilentPayloadUpdateOptions = {
-  isEnabled(): Promise<boolean>;
-  requestQuit(): void;
-};
-
-function isTruthyEnv(value: string | undefined): boolean | null {
-  if (value == null || value.length === 0) return null;
-  if (value === "1" || value === "true" || value === "yes") return true;
-  if (value === "0" || value === "false" || value === "no") return false;
-  throw new Error(`boolean env value must be one of 1/0/true/false/yes/no, got ${value}`);
-}
-
-function normalizeMode(value: string | undefined, fallback: DesktopUpdateMode): DesktopUpdateMode {
-  if (value == null || value.length === 0) return fallback;
-  if (value === DESKTOP_UPDATE_MODES.PACKAGE_LAUNCHER || value === DESKTOP_UPDATE_MODES.JS_INCREMENTAL) return value;
-  throw new Error(`unsupported desktop update mode: ${value}`);
-}
-
-function normalizeChannel(value: string | undefined, fallback: DesktopUpdateChannel): DesktopUpdateChannel {
-  if (value == null || value.length === 0) return fallback;
-  if (isDesktopUpdateChannel(value)) return value;
-  throw new Error(`unsupported desktop update channel: ${value}`);
-}
-
-function isDesktopUpdateChannel(value: unknown): value is DesktopUpdateChannel {
-  return typeof value === "string" && DESKTOP_UPDATE_CHANNEL_VALUES.has(value);
-}
-
-function defaultMetadataUrl(channel: DesktopUpdateChannel): string {
-  return `${DEFAULT_RELEASE_ORIGIN}/${channel}/latest/metadata.json`;
-}
-
-function normalizeDownloadRoot(value: string): string {
-  if (value.includes("\0")) throw new Error("update download root must not contain null bytes");
-  if (!isAbsolute(value)) throw new Error(`update download root must be absolute: ${value}`);
-  return resolve(value);
-}
-
-function normalizeOptionalRoot(value: string | null | undefined, label: string): string | undefined {
-  if (value == null || value.length === 0) return undefined;
-  if (value.includes("\0")) throw new Error(`${label} must not contain null bytes`);
-  if (!isAbsolute(value)) throw new Error(`${label} must be absolute: ${value}`);
-  return resolve(value);
-}
-
-function normalizeOptionalNonEmpty(value: string | null | undefined): string | undefined {
-  if (value == null) return undefined;
-  const trimmed = value.trim();
-  return trimmed.length === 0 ? undefined : trimmed;
-}
-
-function durationEnv(value: string | undefined, fallback: number, name: string): number {
-  if (value == null || value.length === 0) return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${name} must be a non-negative number of milliseconds`);
-  return parsed;
-}
-
-function positiveDurationEnv(value: string | undefined, fallback: number, name: string): number {
-  const parsed = durationEnv(value, fallback, name);
-  if (parsed === 0) throw new Error(`${name} must be greater than 0 milliseconds`);
-  return parsed;
-}
-
-function defaultPollIntervalMs(channel: DesktopUpdateChannel): number {
-  return channel === DESKTOP_UPDATE_CHANNELS.STABLE ? STABLE_POLL_INTERVAL_MS : BETA_POLL_INTERVAL_MS;
-}
-
-export function resolveDesktopUpdaterConfig(input: DesktopUpdaterConfigInput): DesktopUpdaterConfig {
-  const env = input.env ?? process.env;
-  const mode = normalizeMode(env[DESKTOP_UPDATE_ENV.MODE], input.mode ?? DESKTOP_UPDATE_MODES.PACKAGE_LAUNCHER);
-  const defaultEnabled = input.source === SIDECAR_SOURCES.PACKAGED;
-  const enabled = isTruthyEnv(env[DESKTOP_UPDATE_ENV.ENABLED]) ?? defaultEnabled;
-  const runtimeBase = input.runtimeBase == null ? process.cwd() : input.runtimeBase;
-  const downloadRoot = normalizeDownloadRoot(
-    env[DESKTOP_UPDATE_ENV.DOWNLOAD_ROOT] ??
-      input.downloadRoot ??
-      join(resolve(runtimeBase), "updates"),
-  );
-  const currentVersion =
-    env[DESKTOP_UPDATE_ENV.CURRENT_VERSION] ??
-    input.currentVersion ??
-    input.appVersion ??
-    "0.0.0";
-  const channel = normalizeChannel(env[DESKTOP_UPDATE_ENV.CHANNEL], defaultChannelForVersion(currentVersion));
-  const installerObservationRoot = normalizeOptionalRoot(input.installerObservationRoot, "installer observation root");
-  const launcherLaunchPath = normalizeOptionalNonEmpty(input.launcherLaunchPath);
-  const launcherRoot = normalizeOptionalRoot(input.launcherRoot, "launcher root");
-  const launcherPayloadExtractorPath = normalizeOptionalRoot(input.launcherPayloadExtractorPath, "launcher payload extractor path");
-  const launcherRuntimePath = normalizeOptionalRoot(input.launcherRuntimePath, "launcher runtime path");
-  const namespace = normalizeOptionalNonEmpty(input.namespace);
-
-  return {
-    arch: env[DESKTOP_UPDATE_ENV.ARCH] ?? input.arch ?? process.arch,
-    autoCheck: isTruthyEnv(env[DESKTOP_UPDATE_ENV.AUTO_CHECK]) ?? enabled,
-    autoDownload: isTruthyEnv(env[DESKTOP_UPDATE_ENV.AUTO_DOWNLOAD]) ?? true,
-    autoOpen: isTruthyEnv(env[DESKTOP_UPDATE_ENV.AUTO_OPEN]) ?? false,
-    checkBackoffInitialMs: positiveDurationEnv(
-      env[DESKTOP_UPDATE_ENV.CHECK_BACKOFF_INITIAL_MS],
-      DEFAULT_POLL_BACKOFF_INITIAL_MS,
-      DESKTOP_UPDATE_ENV.CHECK_BACKOFF_INITIAL_MS,
-    ),
-    checkBackoffMaxMs: positiveDurationEnv(
-      env[DESKTOP_UPDATE_ENV.CHECK_BACKOFF_MAX_MS],
-      DEFAULT_POLL_BACKOFF_MAX_MS,
-      DESKTOP_UPDATE_ENV.CHECK_BACKOFF_MAX_MS,
-    ),
-    checkInitialDelayMs: durationEnv(
-      env[DESKTOP_UPDATE_ENV.CHECK_INITIAL_DELAY_MS],
-      DEFAULT_POLL_INITIAL_DELAY_MS,
-      DESKTOP_UPDATE_ENV.CHECK_INITIAL_DELAY_MS,
-    ),
-    checkIntervalMs: positiveDurationEnv(
-      env[DESKTOP_UPDATE_ENV.CHECK_INTERVAL_MS],
-      defaultPollIntervalMs(channel),
-      DESKTOP_UPDATE_ENV.CHECK_INTERVAL_MS,
-    ),
-    channel,
-    currentVersion,
-    downloadRoot,
-    enabled,
-    ...(installerObservationRoot == null ? {} : { installerObservationRoot }),
-    ...(launcherLaunchPath == null ? {} : { launcherLaunchPath }),
-    ...(launcherRoot == null ? {} : { launcherRoot }),
-    ...(launcherPayloadExtractorPath == null ? {} : { launcherPayloadExtractorPath }),
-    ...(launcherRuntimePath == null ? {} : { launcherRuntimePath }),
-    metadataUrl: env[DESKTOP_UPDATE_ENV.METADATA_URL] ?? defaultMetadataUrl(channel),
-    mode,
-    ...(namespace == null ? {} : { namespace }),
-    openDryRun: isTruthyEnv(env[DESKTOP_UPDATE_ENV.OPEN_DRY_RUN]) ?? false,
-    platform: env[DESKTOP_UPDATE_ENV.PLATFORM] ?? input.platform ?? process.platform,
-    source: input.source,
-  };
-}
-
-function isSupportedPackageLauncherPlatform(platform: string): boolean {
-  return platform === "darwin" || platform === "win32";
-}
-
-function capabilitiesFor(status: { artifactType?: string; mode: DesktopUpdateMode; platform: string; supported: boolean }) {
-  const packageLauncher =
-    status.mode === DESKTOP_UPDATE_MODES.PACKAGE_LAUNCHER &&
-    isSupportedPackageLauncherPlatform(status.platform) &&
-    status.supported;
-  const payloadUpdate = status.artifactType === "payload";
-  const hasSelectedArtifact = status.artifactType != null && status.artifactType.length > 0;
-  const manualInstaller = packageLauncher && (!hasSelectedArtifact || !payloadUpdate);
-  return {
-    canApplyInPlace: packageLauncher && payloadUpdate,
-    canDownload: packageLauncher,
-    canOpenInstaller: manualInstaller,
-    requiresManualInstall: manualInstaller,
-  };
-}
 
 function createError(code: string, message: string, details?: unknown): DesktopUpdateErrorSnapshot {
   return {
@@ -818,9 +619,39 @@ async function ensureOwnedUpdateRoot(
   }
 }
 
-function defaultChannelForVersion(version: string): DesktopUpdateChannel {
-  const channel = releaseChannelFromVersion(version);
-  return channel ?? DESKTOP_UPDATE_CHANNELS.STABLE;
+/**
+ * Manual-clear degradation for a corrupt store: rebuild an update root the
+ * updater can PROVE it owns. Proof is the current-generation ownership
+ * sentinel — everything else inside an owned root is updater cache by
+ * definition and safe to purge. Roots without a sentinel (unowned), with a
+ * foreign-generation marker (another updater's store), or failing IO are
+ * never touched; the caller surfaces the original store error instead.
+ */
+async function rebuildOwnedUpdateRootForManualClear(
+  config: DesktopUpdaterConfig,
+  logger: DesktopUpdaterLogger,
+): Promise<boolean> {
+  try {
+    const root = normalizeDownloadRoot(config.downloadRoot);
+    const rootEntry = await lstat(root);
+    if (!rootEntry.isDirectory() || rootEntry.isSymbolicLink()) return false;
+    const realRoot = await realpath(root);
+    const layout = resolveDesktopUpdaterStoreLayout(realRoot);
+    const sentinel = await readJson<{ version?: number }>(layout.ownershipSentinelPath);
+    if (sentinel == null || sentinel.version !== UPDATE_ROOT_VERSION) return false;
+    for (const entry of await readdir(realRoot)) {
+      if (entry === OWNERSHIP_SENTINEL) continue;
+      await rm(join(realRoot, entry), { force: true, recursive: true });
+    }
+    await writeJson(layout.metadataPath, { version: STORE_METADATA_VERSION });
+    logger.warn("[open-design updater] rebuilt corrupt owned update store for manual clear", { root: realRoot });
+    return true;
+  } catch (error) {
+    logger.warn("[open-design updater] failed to rebuild corrupt update store for manual clear", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
 }
 
 export function compareVersions(a: string, b: string): number {
@@ -895,7 +726,7 @@ function selectedPackageLauncherArtifact(config: DesktopUpdaterConfig, preferPay
 }
 
 function installerObservationArtifactType(value: string | undefined): InstallerObservationArtifactType | null {
-  if (value === "dmg" || value === "installer") return value;
+  if (value === "dmg" || value === "installer" || value === "payload") return value;
   return null;
 }
 
@@ -1028,39 +859,97 @@ function selectUpdateCandidateWithFallback(
   return selectUpdateCandidate(metadata, config);
 }
 
-function controlLauncherVersionMin(metadata: Record<string, unknown>): string | null {
+function controlLauncherVersion(metadata: Record<string, unknown>): Record<string, unknown> | null {
   const control = objectField(metadata, "control");
   const launcher = control == null ? null : objectField(control, "launcher");
-  const version = launcher == null ? null : objectField(launcher, "version");
+  return launcher == null ? null : objectField(launcher, "version");
+}
+
+function controlLauncherVersionMin(metadata: Record<string, unknown>): string | null {
+  const version = controlLauncherVersion(metadata);
   return version == null ? null : stringField(version, "min");
+}
+
+function controlLauncherVersionUrl(metadata: Record<string, unknown>): string | null {
+  const version = controlLauncherVersion(metadata);
+  return version == null ? null : stringField(version, "url");
+}
+
+/**
+ * Resolve the version of the PHYSICALLY INSTALLED outer package. This is
+ * distinct from `config.currentVersion`: after a payload update the running
+ * version is the payload's, while the installed outer bundle on disk stays at
+ * its install-time version and is the thing an installer reinstall replaces.
+ * The outer bundle's own `open-design-config.json` is the only fleet-wide
+ * source (every packaged generation ships it), anchored by the launcher
+ * launch path from `install.json`. Returns null when unreadable.
+ */
+export async function resolveInstalledOuterVersion(config: DesktopUpdaterConfig): Promise<string | null> {
+  if (config.installedVersionOverride != null) return config.installedVersionOverride;
+  if (config.launcherLaunchPath == null) return null;
+  const outerConfigPath =
+    config.platform === "darwin"
+      ? join(config.launcherLaunchPath, "Contents", "Resources", "open-design-config.json")
+      : join(dirname(config.launcherLaunchPath), "resources", "open-design-config.json");
+  try {
+    const raw: unknown = JSON.parse(await readFile(outerConfigPath, "utf8"));
+    if (!isRecord(raw)) return null;
+    return stringField(raw, "appVersion");
+  } catch {
+    return null;
+  }
 }
 
 /**
  * Installed-base escape hatch: decide whether the remote release is beyond what
- * this build can adopt as an in-place payload update, forcing a full installer
- * instead. Two orthogonal guardrails, either of which trips → installer:
+ * this install can adopt as an in-place payload update, forcing a full
+ * installer instead. Two orthogonal guardrails, either of which trips →
+ * installer:
  *
  *  - `launcher.schema` (ABI axis): the release declares a launcher-contract schema
  *    number this build cannot interpret (`feed.launcher.schema >
  *    LAUNCHER_SCHEMA_VERSION`). This is the reseed boundary — a pure int compare.
  *  - `control.launcher.version.min` (recency axis): the release requires a
- *    launcher/build version newer than this one (`min > currentVersion`).
+ *    physically installed outer package at least this new (`min >
+ *    installedOuterVersion`). Payload updates never touch the outer bundle, so
+ *    the comparison basis is the installed outer version, NOT the running
+ *    version — a broken outer generation must reach the installer path even
+ *    when its payload is current. When min is set but the outer version cannot
+ *    be read, the gate trips conservatively: local state that cannot be
+ *    identified is itself a reinstall signal.
  *
- * Both are feed declarations read here; a future launcher enforces the same schema
- * floor locally against on-disk manifests. Missing/malformed fields are ignored
- * (fail-open) so older feeds keep updating seamlessly.
+ * Missing/malformed metadata fields are ignored (fail-open) so older feeds keep
+ * updating seamlessly. Returns the reinstall requirement for the status
+ * snapshot, or null when an in-place payload update is acceptable.
  */
-export function remoteRequiresReinstall(metadata: Record<string, unknown>, config: DesktopUpdaterConfig): boolean {
+export function remoteRequiresReinstall(
+  metadata: Record<string, unknown>,
+  config: DesktopUpdaterConfig,
+  installedOuterVersion: string | null,
+): DesktopUpdateReinstallSnapshot | null {
+  const minVersion = controlLauncherVersionMin(metadata);
+  const url = controlLauncherVersionUrl(metadata);
+  const shared = {
+    ...(minVersion == null ? {} : { minVersion }),
+    ...(url == null ? {} : { url }),
+  };
   const launcher = objectField(metadata, "launcher");
   const remoteLauncherSchema = launcher == null ? undefined : numberField(launcher, "schema");
   if (remoteLauncherSchema != null && remoteLauncherSchema > LAUNCHER_SCHEMA_VERSION) {
-    return true;
+    return {
+      ...(installedOuterVersion == null ? {} : { installedVersion: installedOuterVersion }),
+      reason: "launcher-schema",
+      ...shared,
+    };
   }
-  const minVersion = controlLauncherVersionMin(metadata);
-  if (minVersion != null && compareVersions(minVersion, config.currentVersion) > 0) {
-    return true;
+  if (minVersion == null) return null;
+  if (installedOuterVersion == null) {
+    return { reason: "outer-version-unreadable", ...shared };
   }
-  return false;
+  if (compareVersions(minVersion, installedOuterVersion) > 0) {
+    return { installedVersion: installedOuterVersion, reason: "outer-below-min", ...shared };
+  }
+  return null;
 }
 
 async function fetchJson(fetchImpl: typeof globalThis.fetch, url: string): Promise<Record<string, unknown>> {
@@ -1249,7 +1138,7 @@ async function assertPreparedLauncherPayloadRelease(input: {
   config: DesktopUpdaterConfig;
   root: string;
   version: string;
-}): Promise<void> {
+}): Promise<string> {
   const manifest = validateLauncherPayloadManifest(await readJsonStrict<unknown>(join(input.root, "manifest.json")), {
     channel: input.config.channel,
     namespace: input.config.namespace ?? "",
@@ -1275,6 +1164,7 @@ async function assertPreparedLauncherPayloadRelease(input: {
     throw new Error("launcher payload root must be a plain directory");
   }
   await assertLauncherPayloadBootConfig({ manifest, payloadRoot, stagingRoot: input.root });
+  return entryExecutable;
 }
 
 async function prepareLauncherPayloadRelease(input: {
@@ -1388,7 +1278,7 @@ async function activatePreparedLauncherPayloadRelease(input: {
   logger: DesktopUpdaterLogger;
   now: () => Date;
   removeLauncherPayloadRoot: (path: string) => Promise<void>;
-}): Promise<LauncherRuntimeDescriptor> {
+}): Promise<{ launchPath: string; runtime: LauncherRuntimeDescriptor }> {
   if (input.config.launcherRoot == null || input.config.launcherRuntimePath == null || input.config.namespace == null) {
     throw new Error("launcher payload activate requires launcher root, runtime path, and namespace");
   }
@@ -1403,14 +1293,29 @@ async function activatePreparedLauncherPayloadRelease(input: {
     root: input.config.launcherRoot,
     version: input.activeRelease.ref.version,
   });
-  await assertPreparedLauncherPayloadRelease({
+  const launchPath = await assertPreparedLauncherPayloadRelease({
     config: input.config,
     root: versionPaths.versionRoot,
     version: input.activeRelease.ref.version,
   });
+  const launcherPaths = resolveLauncherPaths({
+    channel: input.config.channel,
+    namespace: input.config.namespace,
+    root: input.config.launcherRoot,
+  });
+  const currentAttempt = await readJsonStrict<LauncherAttemptDescriptor>(launcherPaths.attemptsPath)
+    .then((value) => validateLauncherAttemptDescriptor(value, {
+      channel: input.config.channel,
+      namespace: input.config.namespace ?? "",
+    }))
+    .catch(() => null);
   const activeRuntimeVersion = currentRuntime.active;
   const alreadyActive = activeRuntimeVersion?.version === input.activeRelease.ref.version;
-  const nextActive = alreadyActive && activeRuntimeVersion != null
+  const retryFailedGeneration = alreadyActive &&
+    activeRuntimeVersion != null &&
+    currentAttempt?.version === activeRuntimeVersion.version &&
+    currentAttempt.generation === activeRuntimeVersion.generation;
+  const nextActive = alreadyActive && activeRuntimeVersion != null && !retryFailedGeneration
     ? activeRuntimeVersion
     : {
         generation: Math.max(
@@ -1428,6 +1333,22 @@ async function activatePreparedLauncherPayloadRelease(input: {
     updatedAt: input.now().toISOString(),
   };
   await writeJson(input.config.launcherRuntimePath, nextRuntime);
+  // Pre-arm the launch attempt for the activated pointer: the relaunched
+  // payload carries the matching delegated pointer and treats this attempt as
+  // its own launch in progress, while a payload that dies before reaching its
+  // own bookkeeping leaves the attempt behind as rollback evidence for the
+  // next cold start.
+  await writeJson(launcherPaths.attemptsPath, {
+    channel: input.config.channel,
+    generation: nextActive.generation,
+    namespace: input.config.namespace,
+    schemaVersion: LAUNCHER_SCHEMA_VERSION,
+    startedAt: input.now().toISOString(),
+    version: nextActive.version,
+  } satisfies LauncherAttemptDescriptor);
+  if (retryFailedGeneration) {
+    await rm(launcherPaths.handoffPath, { force: true });
+  }
   await cleanupLauncherPayloadRoots({
     config: input.config,
     currentRuntime: nextRuntime,
@@ -1443,7 +1364,7 @@ async function activatePreparedLauncherPayloadRelease(input: {
     trigger: "activate",
     versionPaths,
   });
-  return nextRuntime;
+  return { launchPath, runtime: nextRuntime };
 }
 
 function launcherCleanupErrorFrom(error: unknown): NonNullable<LauncherCleanupEntry["error"]> {
@@ -1781,7 +1702,7 @@ async function launchMacInstallerAfterQuit(
     const child = deps.spawnDetached(
       "/bin/sh",
       [scriptPath, input.appPid.toString(), input.installerPath, timeoutSeconds],
-      { detached: true, stdio: "ignore", windowsHide: true },
+      { cwd: input.cwd, detached: true, stdio: "ignore", windowsHide: true },
     );
     child.unref();
     return "";
@@ -1826,7 +1747,7 @@ async function launchWindowsInstallerAfterQuit(
         "-LogPath",
         logPath,
       ],
-      { detached: true, stdio: "ignore", windowsHide: true },
+      { cwd: input.cwd, detached: true, stdio: "ignore", windowsHide: true },
     );
     child.unref();
     return "";
@@ -1835,16 +1756,23 @@ async function launchWindowsInstallerAfterQuit(
   }
 }
 
-async function launchWindowsAppAfterQuit(
+async function launchPayloadAppAfterQuit(
   input: DeferredAppLaunchInput,
   deps: { now: () => Date; spawnDetached: SpawnInstallerHelper },
 ): Promise<DeferredLaunchResult> {
   try {
     const child = deps.spawnDetached(
       input.launchPath,
-      buildLauncherAfterQuitArgs({ targetPid: input.appPid, timeoutMs: input.timeoutMs }),
-      { detached: true, stdio: "ignore", windowsHide: true },
+      [
+        ...buildLauncherAfterQuitArgs({ targetPid: input.appPid, timeoutMs: input.timeoutMs }),
+        ...(input.delegated == null ? [] : buildLauncherDelegatedArgs(input.delegated)),
+      ],
+      { cwd: input.cwd, detached: true, stdio: "ignore", windowsHide: true },
     );
+    await new Promise<void>((resolveSpawn, rejectSpawn) => {
+      child.once("spawn", () => resolveSpawn());
+      child.once("error", rejectSpawn);
+    });
     child.unref();
     return {};
   } catch (error) {
@@ -1899,6 +1827,7 @@ function isReleaseLifecycleState(value: unknown): value is DesktopUpdateReleaseL
 function isReleaseCleanupReason(value: unknown): value is ReleaseCleanupReason {
   return value === "cleanup-failed" ||
     value === "current-version-or-newer" ||
+    value === "manual-clear" ||
     value === "metadata-invalid" ||
     value === "metadata-missing" ||
     value === "older-than-current-version";
@@ -1930,7 +1859,7 @@ function isReleaseCleanupDescriptor(value: unknown): value is ReleaseCleanupDesc
   if (!isRecord(value)) return false;
   if (value.version !== RELEASE_CLEANUP_DESCRIPTOR_VERSION) return false;
   if (typeof value.platform !== "string") return false;
-  if (value.trigger !== "cold-start" && value.trigger !== "next-version-ready") return false;
+  if (value.trigger !== "cold-start" && value.trigger !== "manual" && value.trigger !== "next-version-ready") return false;
   if (typeof value.updatedAt !== "string") return false;
   if (value.currentVersion != null && typeof value.currentVersion !== "string") return false;
   if (value.readyVersion != null && typeof value.readyVersion !== "string") return false;
@@ -1990,27 +1919,64 @@ async function withUpdaterLifecycleLock<T>(
   layout: DesktopUpdaterStoreLayout,
   logger: DesktopUpdaterLogger,
   task: () => Promise<T>,
+  options: { reclaimStale?: boolean } = {},
 ): Promise<T | null> {
   await mkdir(layout.stateRoot, { recursive: true });
+  const acquire = async (): Promise<boolean> => {
+    try {
+      await mkdir(layout.lockRoot);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      return false;
+    }
+  };
+  let acquired = await acquire();
+  if (!acquired && options.reclaimStale === true) {
+    const owner = await readJson<unknown>(join(layout.lockRoot, LOCK_OWNER_FILE));
+    const ownerPid = isRecord(owner) && owner.owner === "open-design-updater-lifecycle"
+      && owner.version === RELEASE_CLEANUP_DESCRIPTOR_VERSION
+      && typeof owner.pid === "number" && Number.isSafeInteger(owner.pid) && owner.pid > 0
+      ? owner.pid
+      : null;
+    let ownerIsDead = false;
+    if (ownerPid != null) {
+      try {
+        process.kill(ownerPid, 0);
+      } catch (error) {
+        ownerIsDead = (error as NodeJS.ErrnoException).code === "ESRCH";
+      }
+    }
+    if (ownerIsDead) {
+      const staleLockRoot = `${layout.lockRoot}.stale-${process.pid}-${Date.now()}`;
+      try {
+        await rename(layout.lockRoot, staleLockRoot);
+        await rm(staleLockRoot, { force: true, recursive: true });
+        acquired = await acquire();
+        if (acquired) {
+          logger.warn("[open-design updater] reclaimed stale updater lifecycle lock", {
+            lockRoot: layout.lockRoot,
+            ownerPid,
+          });
+        }
+      } catch (error) {
+        logger.warn("[open-design updater] failed to reclaim stale updater lifecycle lock", error);
+      }
+    }
+  }
+  if (!acquired) {
+    logger.warn("[open-design updater] skipped release lifecycle because updater lifecycle lock is held", {
+      lockRoot: layout.lockRoot,
+    });
+    return null;
+  }
   try {
-    await mkdir(layout.lockRoot);
     await writeJson(join(layout.lockRoot, LOCK_OWNER_FILE), {
       createdAt: new Date().toISOString(),
       owner: "open-design-updater-lifecycle",
       pid: process.pid,
       version: RELEASE_CLEANUP_DESCRIPTOR_VERSION,
     });
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "EEXIST") {
-      logger.warn("[open-design updater] skipped release lifecycle because updater lifecycle lock is held", {
-        lockRoot: layout.lockRoot,
-      });
-      return null;
-    }
-    throw error;
-  }
-  try {
     return await task();
   } finally {
     await rm(layout.lockRoot, { force: true, recursive: true }).catch((error: unknown) => {
@@ -2032,12 +1998,15 @@ function mergeExistingReleaseCleanupEntry(
 
 async function scanReleaseCleanupEntries(input: {
   config: DesktopUpdaterConfig;
+  // Manual clear resets the downloaded-update state entirely, so every scanned
+  // release is deprecated regardless of its version relative to the running one.
+  deprecateAll?: boolean;
   descriptor: ReleaseCleanupDescriptor | null;
   layout: DesktopUpdaterStoreLayout;
   nowIso: string;
   readyVersion?: string;
 }): Promise<ReleaseCleanupEntry[]> {
-  const { config, descriptor, layout, nowIso, readyVersion } = input;
+  const { config, deprecateAll, descriptor, layout, nowIso, readyVersion } = input;
   const existing = new Map((descriptor?.releases ?? []).map((entry) => [entry.key, entry] as const));
   const entries = await readdir(layout.releasesRoot, { withFileTypes: true }).catch(() => []);
   const nextEntries: ReleaseCleanupEntry[] = [];
@@ -2119,14 +2088,18 @@ async function scanReleaseCleanupEntries(input: {
       continue;
     }
 
-    const deprecated = compareVersions(version, config.currentVersion) < 0;
+    const deprecated = deprecateAll === true || compareVersions(version, config.currentVersion) < 0;
     const next: ReleaseCleanupEntry = {
       currentVersion: config.currentVersion,
       key: entry.name,
       metadataPath: relativeStorePath(layout, metadataPath),
       path: relativeStorePath(layout, releaseDir),
       ...(readyVersion == null ? {} : { readyVersion }),
-      reason: deprecated ? "older-than-current-version" : "current-version-or-newer",
+      reason: deprecateAll === true
+        ? "manual-clear"
+        : deprecated
+          ? "older-than-current-version"
+          : "current-version-or-newer",
       state: deprecated ? "deprecated" : "retained",
       updatedAt: nowIso,
       version,
@@ -2216,6 +2189,7 @@ async function runUpdateReleaseLifecycle(input: {
   layout: DesktopUpdaterStoreLayout;
   logger: DesktopUpdaterLogger;
   now: () => Date;
+  reclaimStaleLock?: boolean;
   readyVersion?: string;
   trigger: DesktopUpdateCacheLifecycleTrigger;
 }): Promise<DesktopUpdateCacheLifecycleSummary | null> {
@@ -2224,13 +2198,14 @@ async function runUpdateReleaseLifecycle(input: {
     const startedAt = now().toISOString();
     const current = await readReleaseCleanupDescriptor(layout);
     let next: ReleaseCleanupDescriptor;
-    if (trigger === "next-version-ready") {
+    if (trigger === "next-version-ready" || trigger === "manual") {
       next = {
         currentVersion: config.currentVersion,
         platform: config.platform,
         ...(readyVersion == null ? {} : { readyVersion }),
         releases: await scanReleaseCleanupEntries({
           config,
+          deprecateAll: trigger === "manual",
           descriptor: current,
           layout,
           nowIso: startedAt,
@@ -2266,7 +2241,7 @@ async function runUpdateReleaseLifecycle(input: {
     });
     await writeJson(layout.cleanupPath, cleaned);
     return summarizeReleaseCleanupDescriptor(cleaned, config.platform);
-  });
+  }, { reclaimStale: input.reclaimStaleLock });
 }
 
 function launcherCleanupError(code: string, message: string): NonNullable<LauncherCleanupEntry["error"]> {
@@ -2288,6 +2263,95 @@ function summarizeLauncherCleanupDescriptor(descriptor: LauncherCleanupDescripto
     if (version.state === "retained") summary.retained += 1;
   }
   return summary;
+}
+
+/**
+ * Manual disaster-recovery clear of launcher-side state: removes a stale
+ * attempt.json, removes a non-terminal desktop-handoff journal, and deletes
+ * any payload version directory not retained by runtime pointers or explicit
+ * retained cleanup entries. The running desktop's own version is always
+ * retained through runtime.active. A confirmed handoff journal is a successful
+ * terminal state consulted by historical-outer cold starts and must survive.
+ * When the runtime descriptor is unreadable the retained set is unknown, so
+ * version cleanup is skipped entirely rather than risking the active payload.
+ */
+async function clearLauncherStateForManualClear(input: {
+  config: DesktopUpdaterConfig;
+  logger: DesktopUpdaterLogger;
+  now: () => Date;
+  removeLauncherPayloadRoot: (path: string) => Promise<void>;
+}): Promise<void> {
+  const { config, logger, now, removeLauncherPayloadRoot } = input;
+  if (config.launcherRoot == null || config.launcherRuntimePath == null || config.namespace == null) return;
+  const launcherPaths = resolveLauncherPaths({
+    channel: config.channel,
+    namespace: config.namespace,
+    root: config.launcherRoot,
+  });
+
+  // The app is running its active payload right now, so an unconfirmed attempt
+  // is leftover state from an interrupted transition. Removing it means the
+  // next cold start retries the active pointer instead of rolling back — the
+  // deliberate trade of a manual reset.
+  await rm(launcherPaths.attemptsPath, { force: true }).catch((error: unknown) => {
+    logger.warn("[open-design updater] failed to clear stale launcher attempt", {
+      error: error instanceof Error ? error.message : String(error),
+      path: launcherPaths.attemptsPath,
+    });
+  });
+
+  const rawHandoff = await readFile(launcherPaths.handoffPath, "utf8").catch(() => null);
+  if (rawHandoff != null) {
+    let confirmed = false;
+    try {
+      const parsed: unknown = JSON.parse(rawHandoff);
+      confirmed = isRecord(parsed) && parsed.state === "confirmed";
+    } catch {
+      confirmed = false;
+    }
+    if (!confirmed) {
+      await rm(launcherPaths.handoffPath, { force: true }).catch((error: unknown) => {
+        logger.warn("[open-design updater] failed to clear stale desktop handoff journal", {
+          error: error instanceof Error ? error.message : String(error),
+          path: launcherPaths.handoffPath,
+        });
+      });
+    }
+  }
+
+  let runtime: LauncherRuntimeDescriptor;
+  try {
+    runtime = validateLauncherRuntimeDescriptor(
+      await readJsonStrict<LauncherRuntimeDescriptor>(config.launcherRuntimePath),
+      { channel: config.channel, namespace: config.namespace },
+    );
+  } catch (error) {
+    logger.warn("[open-design updater] skipped manual launcher version cleanup because runtime state is unreadable", {
+      error: error instanceof Error ? error.message : String(error),
+      runtimePath: config.launcherRuntimePath,
+    });
+    return;
+  }
+  const keepVersions = new Set<string>([
+    ...(runtime.active == null ? [] : [runtime.active.version]),
+    ...(runtime.lastSuccessful == null ? [] : [runtime.lastSuccessful.version]),
+  ]);
+  const versionPaths = resolveLauncherVersionPaths({
+    channel: config.channel,
+    namespace: config.namespace,
+    root: config.launcherRoot,
+    version: runtime.active?.version ?? config.currentVersion,
+  });
+  await cleanupLauncherPayloadRoots({
+    config,
+    currentRuntime: runtime,
+    keepVersions,
+    logger,
+    now,
+    removeLauncherPayloadRoot,
+    trigger: "manual-clear",
+    versionPaths,
+  });
 }
 
 async function runLauncherCleanupLifecycle(input: {
@@ -2494,10 +2558,14 @@ async function loadActiveRelease(
   metadata: UpdateStoreMetadata,
   config: DesktopUpdaterConfig,
   logger: DesktopUpdaterLogger,
+  allowCurrentVersion = false,
 ): Promise<{ active: LoadedRelease | null; ok: true } | { error: DesktopUpdateErrorSnapshot; ok: false }> {
   const active = metadata.active;
   if (active == null) return { ok: true, active: null };
-  if (compareVersions(active.version, config.currentVersion) <= 0) return { ok: true, active: null };
+  const currentVersionComparison = compareVersions(active.version, config.currentVersion);
+  if (currentVersionComparison < 0 || (currentVersionComparison === 0 && !allowCurrentVersion)) {
+    return { ok: true, active: null };
+  }
   const artifactPath = resolve(root.realRoot, active.artifactPath);
   if (!containsPath(root.realRoot, artifactPath)) {
     const error = storeShapeError(root.realRoot, "active release artifact path escaped update root", { artifactPath });
@@ -2597,12 +2665,7 @@ export function createDesktopUpdater(
       : launchMacInstallerAfterQuit(input, { now, spawnDetached })
   ));
   const launchAppAfterQuit = deps.launchAppAfterQuit ?? (async (input) => {
-    if (config.platform === "win32") return await launchWindowsAppAfterQuit(input, { now, spawnDetached });
-    const error = await launchMacInstallerAfterQuit(
-      { appPid: input.appPid, installerPath: input.launchPath, root: input.root, timeoutMs: input.timeoutMs },
-      { now, spawnDetached },
-    );
-    return error.length > 0 ? { error } : {};
+    return await launchPayloadAppAfterQuit(input, { now, spawnDetached });
   });
   const listeners = new Set<() => void>();
   let candidate: UpdateCandidate | null = null;
@@ -2614,6 +2677,7 @@ export function createDesktopUpdater(
   let installFrozen = false;
   let lifecycleSummary: DesktopUpdateCacheLifecycleSummary | undefined;
   let progress: DesktopUpdateProgressSnapshot | undefined;
+  let reinstallRequirement: DesktopUpdateReinstallSnapshot | undefined;
   let state: DesktopUpdateState = DESKTOP_UPDATE_STATES.IDLE;
   let error: DesktopUpdateErrorSnapshot | undefined;
   let operation: Promise<unknown> = Promise.resolve();
@@ -2701,6 +2765,7 @@ export function createDesktopUpdater(
       paths: { downloadRoot: config.downloadRoot, manifestPath: join(config.downloadRoot, STORE_METADATA_FILE) },
       platform: config.platform,
       ...(progress == null ? {} : { progress }),
+      ...(reinstallRequirement == null ? {} : { reinstall: reinstallRequirement }),
       state,
       supported: statusSupported,
     };
@@ -2760,9 +2825,34 @@ export function createDesktopUpdater(
     const opened = await openStore();
     if (!opened.ok) return opened.status;
     const restoredMetadata = await clearInterruptedIncomingDownload(opened.root, opened.metadata, logger);
-    const loadedActive = await loadActiveRelease(opened.root, restoredMetadata, config, logger);
+    const storedActive = restoredMetadata.active;
+    const launcherPayloadContextValid = storedActive != null
+      && storedActive.artifact.type === "installer"
+      && compareVersions(storedActive.version, config.currentVersion) === 0
+      && await hasValidLauncherPayloadContext(config);
+    const restoredReinstallRequirement = launcherPayloadContextValid
+      ? remoteRequiresReinstall(
+          storedActive.metadata,
+          config,
+          await resolveInstalledOuterVersion(config),
+        ) ?? undefined
+      : undefined;
+    const restoreSameVersionReinstall =
+      restoredReinstallRequirement != null
+      && restoredReinstallRequirement.reason !== "launcher-schema"
+      && restoredReinstallRequirement.minVersion != null
+      && storedActive != null
+      && compareVersions(restoredReinstallRequirement.minVersion, storedActive.version) <= 0;
+    const loadedActive = await loadActiveRelease(
+      opened.root,
+      restoredMetadata,
+      config,
+      logger,
+      restoreSameVersionReinstall,
+    );
     if (!loadedActive.ok) return setState(DESKTOP_UPDATE_STATES.ERROR, loadedActive.error);
     activeRelease = loadedActive.active;
+    reinstallRequirement = activeRelease == null ? undefined : restoredReinstallRequirement;
     // If the app now runs at or beyond the stored active release, the
     // external installer succeeded and its one-shot UI state is stale.
     const clearedAppliedRelease =
@@ -2772,18 +2862,34 @@ export function createDesktopUpdater(
         restoredMetadata.installFrozen === true ||
         restoredMetadata.installResult != null
       );
-    if (clearedAppliedRelease) {
+    // A payload install records the promised relaunch version in
+    // installResult.activeVersion. If this process is running an OLDER
+    // version, that relaunch never stuck — the payload crashed and the
+    // launcher rolled back. The freeze and stale install result must not
+    // survive, or every future check on the rolled-back install would be a
+    // frozen no-op; the downloaded release itself stays verified and
+    // user-actionable.
+    const staleRelaunchFreeze =
+      !clearedAppliedRelease &&
+      restoredMetadata.installResult?.activeVersion != null &&
+      compareVersions(restoredMetadata.installResult.activeVersion, config.currentVersion) > 0;
+    if (clearedAppliedRelease || staleRelaunchFreeze) {
       await writeStoreMetadata(opened.root, {
         ...restoredMetadata,
-        active: undefined,
+        ...(clearedAppliedRelease ? { active: undefined } : {}),
         incoming: undefined,
         installFrozen: undefined,
         installResult: undefined,
         version: STORE_METADATA_VERSION,
       });
+      if (staleRelaunchFreeze) {
+        logUpdateEvent("restore-cleared-stale-relaunch-freeze", {
+          promisedVersion: restoredMetadata.installResult?.activeVersion,
+        });
+      }
     }
-    installFrozen = clearedAppliedRelease ? false : restoredMetadata.installFrozen === true;
-    installResult = clearedAppliedRelease ? undefined : restoredMetadata.installResult;
+    installFrozen = clearedAppliedRelease || staleRelaunchFreeze ? false : restoredMetadata.installFrozen === true;
+    installResult = clearedAppliedRelease || staleRelaunchFreeze ? undefined : restoredMetadata.installResult;
     lastCheckedAt = restoredMetadata.lastCheckedAt;
     metadata = activeRelease?.ref.metadata ?? null;
     candidate = null;
@@ -2889,20 +2995,36 @@ export function createDesktopUpdater(
       }));
       if (root != null) scheduleBackCleanup(root.realRoot, logger);
       const launcherPayloadContextValid = await hasValidLauncherPayloadContext(config);
-      const reseedRequired = launcherPayloadContextValid && remoteRequiresReinstall(body, config);
-      if (reseedRequired) {
+      const installedOuterVersion = launcherPayloadContextValid ? await resolveInstalledOuterVersion(config) : null;
+      reinstallRequirement = launcherPayloadContextValid
+        ? remoteRequiresReinstall(body, config, installedOuterVersion) ?? undefined
+        : undefined;
+      if (reinstallRequirement != null) {
         logUpdateEvent("reseed-required-installer-route", {
           currentVersion: config.currentVersion,
+          installedVersion: reinstallRequirement.installedVersion,
+          minVersion: reinstallRequirement.minVersion,
+          reason: reinstallRequirement.reason,
           supportedLauncherSchema: LAUNCHER_SCHEMA_VERSION,
         });
       }
-      const selected = selectUpdateCandidateWithFallback(body, config, launcherPayloadContextValid && !reseedRequired);
+      const selected = selectUpdateCandidateWithFallback(body, config, launcherPayloadContextValid && reinstallRequirement == null);
       if (!selected.ok) {
         return selected.state === DESKTOP_UPDATE_STATES.ERROR
           ? setFailurePreservingActive(selected.error)
           : setState(selected.state, selected.error);
       }
-      if (compareVersions(selected.candidate.version, config.currentVersion) <= 0) {
+      // Same-version installer reinstall (disaster posture): when the installed
+      // outer is below min, the installer must be offered even with no newer
+      // release — waiting for the next release would strand broken outers.
+      // Clamped to min <= candidate so reinstalling actually clears the gate;
+      // otherwise the offer could never converge and would nag forever.
+      const sameVersionReinstall =
+        reinstallRequirement != null &&
+        reinstallRequirement.reason !== "launcher-schema" &&
+        reinstallRequirement.minVersion != null &&
+        compareVersions(reinstallRequirement.minVersion, selected.candidate.version) <= 0;
+      if (!sameVersionReinstall && compareVersions(selected.candidate.version, config.currentVersion) <= 0) {
         logUpdateEvent("check-not-available", { candidateVersion: selected.candidate.version });
         candidate = null;
         if (activeRelease != null) {
@@ -3202,33 +3324,36 @@ export function createDesktopUpdater(
     if (config.platform !== "darwin" && config.platform !== "win32") return await openPath(resolvedDownload);
     return await launchInstallerAfterQuit({
       appPid: processPid,
+      cwd: config.runtimeBase,
       installerPath: resolvedDownload,
       root: updateRoot,
-      timeoutMs: config.platform === "win32" ? WINDOWS_DEFERRED_INSTALLER_TIMEOUT_MS : MAC_DEFERRED_INSTALLER_TIMEOUT_MS,
+      timeoutMs: DEFERRED_INSTALLER_TIMEOUT_MS,
     });
   }
 
-  async function requestPayloadRelaunch(updateRoot: string): Promise<DeferredLaunchResult & { launchPath?: string }> {
+  async function requestPayloadRelaunch(
+    updateRoot: string,
+    launchPath: string,
+    delegated?: { generation: number; version: string },
+  ): Promise<DeferredLaunchResult & { launchPath?: string }> {
     if (config.openDryRun) return {};
     if (config.platform !== "darwin" && config.platform !== "win32") return {};
-    const launchPath = config.launcherLaunchPath;
-    if (launchPath == null || launchPath.length === 0) {
-      return { error: "launcher payload relaunch requires a stable launcher launch path" };
-    }
     try {
       await access(launchPath);
       const launcherTarget = await lstat(launchPath);
-      if (launcherTarget.isSymbolicLink() || (!launcherTarget.isFile() && !launcherTarget.isDirectory())) {
-        return { error: `launcher launch path is not a plain file or directory: ${launchPath}` };
+      if (launcherTarget.isSymbolicLink() || !launcherTarget.isFile()) {
+        return { error: `launcher payload executable is not a plain file: ${launchPath}` };
       }
     } catch (launchPathError) {
       return { error: launchPathError instanceof Error ? launchPathError.message : String(launchPathError) };
     }
     const result = await launchAppAfterQuit({
       appPid: processPid,
+      cwd: config.runtimeBase,
+      ...(delegated == null ? {} : { delegated }),
       launchPath,
       root: updateRoot,
-      timeoutMs: config.platform === "win32" ? WINDOWS_DEFERRED_INSTALLER_TIMEOUT_MS : MAC_DEFERRED_INSTALLER_TIMEOUT_MS,
+      timeoutMs: DEFERRED_INSTALLER_TIMEOUT_MS,
     });
     return { ...result, launchPath };
   }
@@ -3276,17 +3401,24 @@ export function createDesktopUpdater(
       );
     }
     if (activeRelease.ref.artifact.type === "payload") {
+      let observation: InstallerObservationHandle | null = null;
       try {
         const appliedAt = now().toISOString();
-        await activatePreparedLauncherPayloadRelease({
+        observation = await writeInstallObservation(appliedAt);
+        const activation = await activatePreparedLauncherPayloadRelease({
           activeRelease,
           config,
           logger,
           now,
           removeLauncherPayloadRoot,
         });
-        const relaunch = await requestPayloadRelaunch(opened.root.realRoot);
+        const relaunch = await requestPayloadRelaunch(
+          opened.root.realRoot,
+          activation.launchPath,
+          activation.runtime.active ?? undefined,
+        );
         if (relaunch.error != null && relaunch.error.length > 0) {
+          await markInstallObservationOpenFailed(observation, now().toISOString());
           return setState(DESKTOP_UPDATE_STATES.ERROR, createError("payload-relaunch-failed", relaunch.error));
         }
         installFrozen = true;
@@ -3311,6 +3443,7 @@ export function createDesktopUpdater(
         });
         return setState(DESKTOP_UPDATE_STATES.DOWNLOADED);
       } catch (applyError) {
+        await markInstallObservationOpenFailed(observation, now().toISOString());
         return setState(
           DESKTOP_UPDATE_STATES.ERROR,
           createError("launcher-payload-apply-failed", applyError instanceof Error ? applyError.message : String(applyError)),
@@ -3359,19 +3492,102 @@ export function createDesktopUpdater(
     return await next;
   }
 
+  /**
+   * Manual disaster-recovery reset. Clears every deletable cache domain and
+   * the one-shot update state (downloaded release, install freeze) so the next
+   * check starts from a clean slate. Retained launcher versions
+   * (active/lastSuccessful) and a confirmed handoff journal are never touched.
+   * Boundary: an installer helper already spawned by a prior install is not
+   * cancelled — clearing after opening an installer resets the updater state
+   * only.
+   */
+  async function clearCacheAndResetState(): Promise<DesktopUpdateStatusSnapshot> {
+    const unsupported = unsupportedStatus();
+    if (unsupported != null) return unsupported;
+    logUpdateEvent("manual-cache-clear-start");
+    let opened = await openStore();
+    if (!opened.ok) {
+      // Disaster posture: a corrupt store is one of the blocking scenarios
+      // this action exists to recover from. Rebuild only when ownership is
+      // provable; otherwise surface the original store error unchanged.
+      if (!(await rebuildOwnedUpdateRootForManualClear(config, logger))) return opened.status;
+      logUpdateEvent("manual-cache-clear-store-rebuilt");
+      opened = await openStore();
+      if (!opened.ok) return opened.status;
+    }
+    // Reset one-shot state before any deletion: even if later cleanup steps
+    // fail, the UI must not stay stuck on stale downloaded/frozen state — that
+    // is the very blocking scenario this action exists to recover from.
+    await writeStoreMetadata(opened.root, {
+      ...opened.metadata,
+      active: undefined,
+      incoming: undefined,
+      installFrozen: false,
+      installResult: undefined,
+      version: STORE_METADATA_VERSION,
+    });
+    activeRelease = null;
+    candidate = null;
+    incomingRelease = null;
+    installFrozen = false;
+    installResult = undefined;
+    progress = undefined;
+    reinstallRequirement = undefined;
+
+    const layout = opened.root.layout;
+    for (const transientRoot of [layout.stagingRoot, layout.downloadsRoot]) {
+      const entries = await readdir(transientRoot).catch(() => [] as string[]);
+      for (const entry of entries) {
+        const target = resolve(transientRoot, entry);
+        if (!containsPath(transientRoot, target)) continue;
+        await rm(target, { force: true, recursive: true }).catch((error: unknown) => {
+          logger.warn("[open-design updater] failed manual transient cache cleanup", {
+            error: error instanceof Error ? error.message : String(error),
+            path: target,
+          });
+        });
+      }
+    }
+    scheduleBackCleanup(opened.root.realRoot, logger);
+
+    const releaseSummary = await runUpdateReleaseLifecycle({
+      config,
+      layout,
+      logger,
+      now,
+      reclaimStaleLock: true,
+      trigger: "manual",
+    });
+    if (releaseSummary == null) {
+      return setState(
+        DESKTOP_UPDATE_STATES.ERROR,
+        createError("updater-lifecycle-lock-held", "update cache cleanup is blocked by an active or unverifiable lifecycle lock"),
+      );
+    }
+    lifecycleSummary = releaseSummary;
+
+    await clearLauncherStateForManualClear({ config, logger, now, removeLauncherPayloadRoot });
+
+    logUpdateEvent("manual-cache-clear-complete");
+    return setState(DESKTOP_UPDATE_STATES.IDLE);
+  }
+
   return {
     checkForUpdates: (options) => serialized(() => checkForCandidate(options)),
+    clearCache: () => serialized(clearCacheAndResetState),
     config,
     downloadUpdate: () => serialized(downloadUpdate),
     handle(action) {
       switch (action) {
-        case "status":
+        case DESKTOP_UPDATE_ACTIONS.STATUS:
           return this.status();
-        case "check":
+        case DESKTOP_UPDATE_ACTIONS.CHECK:
           return this.checkForUpdates();
-        case "download":
+        case DESKTOP_UPDATE_ACTIONS.CLEAR_CACHE:
+          return this.clearCache();
+        case DESKTOP_UPDATE_ACTIONS.DOWNLOAD:
           return this.downloadUpdate();
-        case "install":
+        case DESKTOP_UPDATE_ACTIONS.INSTALL:
           return this.installUpdate();
       }
     },
@@ -3393,137 +3609,5 @@ export function createDesktopUpdater(
         listeners.delete(listener);
       };
     },
-  };
-}
-
-export function createDesktopUpdaterScheduler(
-  updater: DesktopUpdater,
-  options: {
-    backoffInitialMs: number;
-    backoffMaxMs: number;
-    initialDelayMs: number;
-    intervalMs: number;
-    logger?: DesktopUpdaterLogger;
-    startupSilentPayloadUpdate?: StartupSilentPayloadUpdateOptions;
-  },
-): DesktopUpdaterScheduler {
-  const logger = options.logger ?? console;
-  let running = false;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let failureCount = 0;
-  let tickRunning = false;
-  let unsubscribe: (() => void) | null = null;
-  let warnedZeroDelay = false;
-  let startupTickPending = true;
-
-  const clearTimer = () => {
-    if (timer == null) return;
-    clearTimeout(timer);
-    timer = null;
-  };
-
-  const stop = (_reason?: string) => {
-    if (!running && timer == null) return;
-    running = false;
-    clearTimer();
-    unsubscribe?.();
-    unsubscribe = null;
-  };
-
-  const normalizeScheduledDelay = (delayMs: number): number => {
-    if (delayMs > 0) return delayMs;
-    if (!warnedZeroDelay) {
-      warnedZeroDelay = true;
-      logger.warn(
-        `[open-design updater] refusing non-positive scheduled poll delay (${delayMs}ms); `
-          + `using ${MIN_SCHEDULED_POLL_DELAY_MS}ms floor`,
-      );
-    }
-    return MIN_SCHEDULED_POLL_DELAY_MS;
-  };
-
-  const nextDelay = (status: DesktopUpdateStatusSnapshot | null): number => {
-    if (status != null && status.state !== DESKTOP_UPDATE_STATES.ERROR && status.error == null) {
-      failureCount = 0;
-      return options.intervalMs;
-    }
-    failureCount += 1;
-    const backoff = options.backoffInitialMs * 2 ** Math.max(0, failureCount - 1);
-    return Math.min(options.backoffMaxMs, backoff);
-  };
-
-  const schedule = (delayMs: number) => {
-    if (!running || timer != null) return;
-    const boundedDelayMs = normalizeScheduledDelay(delayMs);
-    timer = setTimeout(() => {
-      timer = null;
-      void tick();
-    }, boundedDelayMs);
-    timer.unref?.();
-  };
-
-  const tick = async () => {
-    if (!running || tickRunning) return;
-    tickRunning = true;
-    let status: DesktopUpdateStatusSnapshot | null = null;
-    const startupTick = startupTickPending;
-    startupTickPending = false;
-    try {
-      const startupReady = startupTick && options.startupSilentPayloadUpdate != null
-        ? await updater.status()
-        : null;
-      status = await updater.checkForUpdates();
-      if (
-        startupTick
-        && options.startupSilentPayloadUpdate != null
-        && startupReady?.installResult == null
-        && startupReady?.state === DESKTOP_UPDATE_STATES.DOWNLOADED
-        && startupReady.artifact?.type === "payload"
-        && startupReady.capabilities.canApplyInPlace
-        && startupReady.downloadPath != null
-        && startupReady.downloadPath === status.downloadPath
-        && status.installResult == null
-        && status.state === DESKTOP_UPDATE_STATES.DOWNLOADED
-        && status.artifact?.type === "payload"
-        && status.capabilities.canApplyInPlace
-      ) {
-        try {
-          const enabled = await options.startupSilentPayloadUpdate.isEnabled();
-          if (enabled) {
-            status = await updater.installUpdate();
-            if (status.installResult != null) {
-              stop("silent-payload-installed");
-              options.startupSilentPayloadUpdate.requestQuit();
-              return;
-            }
-          }
-        } catch (silentError) {
-          logger.warn("[open-design updater] startup silent payload update failed", silentError);
-        }
-      }
-      if (status.installResult != null) {
-        stop("installer-opened");
-        return;
-      }
-    } catch (error) {
-      logger.warn("[open-design updater] scheduled update check failed", error);
-    } finally {
-      tickRunning = false;
-    }
-    if (running) schedule(nextDelay(status));
-  };
-
-  return {
-    isRunning: () => running,
-    start() {
-      if (running) return;
-      if (updater.snapshot().installResult != null) return;
-      running = true;
-      unsubscribe = updater.subscribe(() => {
-        if (updater.snapshot().installResult != null) stop("installer-opened");
-      });
-      schedule(options.initialDelayMs);
-    },
-    stop,
   };
 }

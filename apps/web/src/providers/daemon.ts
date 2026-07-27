@@ -294,16 +294,18 @@ export interface DaemonStreamOptions {
   // change the project's persistent `skillId`.
   skillIds?: string[];
   designSystemId?: string | null;
+  inspirationDesignSystemIds?: string[];
   // Project-relative paths the user has staged for this turn. The
   // daemon resolves them inside the project folder, validates they
   // exist, and stitches them into the user message as `@<path>` hints.
   attachments?: string[];
   commentAttachments?: ChatCommentAttachment[];
-  // Per-CLI model + reasoning the user picked in the model menu. Both are
+  // Per-CLI model + reasoning / service tier the user picked in the model menu. These are
   // optional; the daemon validates them against the agent's declared
   // options and falls back to the CLI default when missing.
   model?: string | null;
   reasoning?: string | null;
+  serviceTier?: string | null;
   byokProvider?: ByokChatProviderConfig;
   byokMediaDefaults?: ChatRequest['byokMediaDefaults'];
   research?: ResearchOptions;
@@ -639,10 +641,12 @@ export async function streamViaDaemon({
   skillId,
   skillIds,
   designSystemId,
+  inspirationDesignSystemIds,
   attachments,
   commentAttachments,
   model,
   reasoning,
+  serviceTier,
   byokProvider,
   byokMediaDefaults,
   research,
@@ -677,10 +681,14 @@ export async function streamViaDaemon({
     skillId: skillId ?? null,
     skillIds: Array.isArray(skillIds) ? skillIds : [],
     designSystemId: designSystemId ?? null,
+    ...(inspirationDesignSystemIds && inspirationDesignSystemIds.length > 0
+      ? { inspirationDesignSystemIds }
+      : {}),
     attachments: attachments ?? [],
     commentAttachments: commentAttachments ?? [],
     model: model ?? null,
     reasoning: reasoning ?? null,
+    serviceTier: serviceTier ?? null,
     ...(byokProvider ? { byokProvider } : {}),
     ...(byokMediaDefaults ? { byokMediaDefaults } : {}),
     locale,

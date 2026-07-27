@@ -81,10 +81,18 @@ export interface ChatRequest {
   // a single turn without binding the project to one of them.
   skillIds?: string[];
   designSystemId?: string | null;
+  /**
+   * Additional inspiration design systems beyond the applied primary
+   * (inspiration picker multi-select). Merged into the run's
+   * `inspirationDesignSystemIds` system-prompt metadata for this turn only;
+   * never persisted on the project.
+   */
+  inspirationDesignSystemIds?: string[];
   attachments?: string[];
   commentAttachments?: ChatCommentAttachment[];
   model?: string | null;
   reasoning?: string | null;
+  serviceTier?: string | null;
   /**
    * Run-scoped BYOK provider credentials for the daemon-backed OpenCode
    * adapter. The daemon must not persist this object; it is translated into
@@ -301,6 +309,7 @@ export interface McpRunCreateRequest {
   skillId?: string;
   pluginId?: string;
   model?: string;
+  serviceTier?: string;
   pluginInputs?: Record<string, unknown>;
   mediaExecution?: MediaExecutionPolicy;
   toolBundle?: RunScopedToolBundle;
@@ -608,7 +617,14 @@ export type PersistedAgentEvent =
       refreshedSourceCount?: number;
       error?: string;
     }
-  | { kind: 'tool_use'; id: string; name: string; input: unknown }
+  | {
+      kind: 'tool_use';
+      id: string;
+      name: string;
+      input: unknown;
+      /** Optional wall-clock ms when the tool first started (e.g. ACP first frame). */
+      startedAt?: number;
+    }
   | { kind: 'tool_result'; toolUseId: string; content: string; isError: boolean }
   | {
       kind: 'diagnostic';

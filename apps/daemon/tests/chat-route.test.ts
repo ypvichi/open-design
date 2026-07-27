@@ -32,6 +32,7 @@ import {
 } from '../src/server.js';
 import { skillCwdAliasSegment } from '../src/cwd-aliases.js';
 import { getAgentDef } from '../src/agents.js';
+import { readAppConfig, writeAppConfig } from '../src/app-config.js';
 import { readMemoryConfig, writeMemoryConfig } from '../src/memory.js';
 import { upsertMessage } from '../src/db.js';
 import { renderCodexImagegenOverride } from '../src/prompts/system.js';
@@ -575,7 +576,7 @@ process.stdin.on('end', () => {
         };
         const provider = parsed.provider?.['open-design-byok'];
         expect(provider).toMatchObject({
-          npm: '@ai-sdk/openai',
+          npm: '@ai-sdk/openai-compatible',
           options: {
             baseURL: 'http://127.0.0.1:8000/v1',
           },
@@ -1010,6 +1011,115 @@ child.on('exit', (code, signal) => {
       else process.env.VELA_RUNTIME_KEY = previousRuntimeKey;
       if (previousLinkUrl == null) delete process.env.VELA_LINK_URL;
       else process.env.VELA_LINK_URL = previousLinkUrl;
+    }
+  });
+
+  it('keeps service tier overrides when /api/runs omits model but settings has one', async () => {
+    if (!process.env.OD_DATA_DIR) {
+      throw new Error('OD_DATA_DIR is required for service tier settings tests');
+    }
+    const argsPath = join(tmpdir(), `od-codex-args-${randomUUID()}.json`);
+    const previousConfig = await readAppConfig(process.env.OD_DATA_DIR);
+    try {
+      await writeAppConfig(process.env.OD_DATA_DIR, {
+        agentModels: { codex: { model: 'gpt-5.5' } },
+      });
+      await withFakeAgent(
+        'codex',
+        `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'debug' && args[1] === 'models') {
+  console.log(JSON.stringify([{ id: 'gpt-5.5', name: 'gpt-5.5', service_tiers: [{ id: 'priority', label: 'Fast' }] }]));
+  process.exit(0);
+}
+if (args[0] === 'login' && args[1] === 'status') {
+  console.log('Logged in');
+  process.exit(0);
+}
+fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(args));
+console.log(JSON.stringify({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'done' }] }));
+process.exit(0);
+`,
+        async () => {
+          const createResponse = await fetch(`${baseUrl}/api/runs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agentId: 'codex',
+              message: 'hello',
+              serviceTier: 'priority',
+            }),
+          });
+          expect(createResponse.status).toBe(202);
+          const { runId } = await createResponse.json() as { runId: string };
+          await waitForRunStatus(baseUrl, runId);
+
+          const args = JSON.parse(readFileSync(argsPath, 'utf8')) as string[];
+          expect(args).toContain('--model');
+          expect(args).toContain('gpt-5.5');
+          expect(args).toContain('service_tier="priority"');
+        },
+      );
+    } finally {
+      rmSync(argsPath, { force: true });
+      await writeAppConfig(process.env.OD_DATA_DIR, {
+        agentModels: previousConfig.agentModels ?? null,
+      });
+    }
+  });
+
+  it('keeps service tier overrides when /api/runs omits model and settings has none', async () => {
+    if (!process.env.OD_DATA_DIR) {
+      throw new Error('OD_DATA_DIR is required for service tier settings tests');
+    }
+    const argsPath = join(tmpdir(), `od-codex-args-${randomUUID()}.json`);
+    const previousConfig = await readAppConfig(process.env.OD_DATA_DIR);
+    try {
+      await writeAppConfig(process.env.OD_DATA_DIR, { agentModels: null });
+      await withFakeAgent(
+        'codex',
+        `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'debug' && args[1] === 'models') {
+  console.log(JSON.stringify([{ id: 'gpt-5.5', name: 'gpt-5.5', service_tiers: [{ id: 'priority', label: 'Fast' }] }]));
+  process.exit(0);
+}
+if (args[0] === 'login' && args[1] === 'status') {
+  console.log('Logged in');
+  process.exit(0);
+}
+fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(args));
+console.log(JSON.stringify({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'done' }] }));
+process.exit(0);
+`,
+        async () => {
+          await fetch(`${baseUrl}/api/agents`);
+          const createResponse = await fetch(`${baseUrl}/api/runs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agentId: 'codex',
+              message: 'hello',
+              serviceTier: 'priority',
+            }),
+          });
+          expect(createResponse.status).toBe(202);
+          const { runId } = await createResponse.json() as { runId: string };
+          await waitForRunStatus(baseUrl, runId);
+
+          const args = JSON.parse(readFileSync(argsPath, 'utf8')) as string[];
+          expect(args).toContain('--model');
+          expect(args).toContain('gpt-5.5');
+          expect(args).toContain('service_tier="priority"');
+        },
+      );
+    } finally {
+      rmSync(argsPath, { force: true });
+      await writeAppConfig(process.env.OD_DATA_DIR, {
+        agentModels: previousConfig.agentModels ?? null,
+      });
     }
   });
 
@@ -3011,8 +3121,78 @@ process.stdin.on('end', () => {
           expect(transitionIdx).toBeGreaterThan(-1);
           expect(transcriptIdx).toBeGreaterThan(transitionIdx);
           expect(prompt).toContain('The user has answered the discovery form. Do not emit another discovery form.');
-          expect(prompt).toContain('Continue with RULE 2 / RULE 3 now.');
+          // This run is ungrounded (no design system, no skill), so the
+          // brief-answered turn routes to the pending inspiration step —
+          // both the `# Instructions` override and the transition line —
+          // instead of the immediate build (prompts/flow-steps.ts).
+          expect(prompt).toContain('## OVERRIDE — brief answered; the inspiration step comes next');
+          expect(prompt).toContain('This run is still ungrounded (no active design system, no picked template).');
+          expect(prompt).not.toContain('Continue with RULE 2 / RULE 3 now.');
           expect(prompt).toContain(formAnswers);
+        },
+      );
+    } finally {
+      if (previousCapturePath == null) {
+        delete process.env.OD_CAPTURE_PROMPT_PATH;
+      } else {
+        process.env.OD_CAPTURE_PROMPT_PATH = previousCapturePath;
+      }
+    }
+  });
+
+  it('grounds inspiration picker multi-select systems in the run prompt', async () => {
+    // Chain spec for the inspiration picker's multi design-system pick:
+    // web sends `inspirationDesignSystemIds` on the chat body (additional
+    // systems beyond the applied primary), and the daemon must resolve each
+    // id through the design-system reader and embed its DESIGN.md content —
+    // ids alone cannot ground a selection, so the assertion below pins an
+    // actual token from bento's DESIGN.md, not just the names.
+    const captureDir = mkdtempSync(join(tmpdir(), 'od-insp-meta-prompt-'));
+    tempDirs.push(captureDir);
+    const capturePath = join(captureDir, 'prompt.txt');
+    const previousCapturePath = process.env.OD_CAPTURE_PROMPT_PATH;
+    process.env.OD_CAPTURE_PROMPT_PATH = capturePath;
+    try {
+      await withFakeAgent(
+        'opencode',
+        `
+const fs = require('node:fs');
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { input += chunk; });
+process.stdin.on('end', () => {
+  fs.writeFileSync(process.env.OD_CAPTURE_PROMPT_PATH, input, 'utf8');
+  console.log(JSON.stringify({ type: 'text', part: { text: 'building now' } }));
+});
+`,
+        async () => {
+          const createResponse = await fetch(`${baseUrl}/api/runs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agentId: 'opencode',
+              message: 'Build a landing page with these inspirations.',
+              currentPrompt: 'Build a landing page with these inspirations.',
+              inspirationDesignSystemIds: ['bento', 'organic'],
+            }),
+          });
+          expect(createResponse.status).toBe(202);
+          const { runId } = await createResponse.json() as { runId: string };
+          const statusBody = await waitForRunStatus(baseUrl, runId);
+
+          expect(statusBody.status).toBe('succeeded');
+          expect(existsSync(capturePath)).toBe(true);
+          const prompt = readFileSync(capturePath, 'utf8');
+          expect(prompt).toContain('**inspirationDesignSystemIds**: bento, organic');
+          // Grounding: the composed prompt embeds each resolvable system's
+          // DESIGN.md body (bounded), so the agent has real tokens to
+          // borrow — `#FAD4C0` is bento's primary color token. `organic`
+          // is not a registry system, so it degrades gracefully to the
+          // metadata line above without an (empty) grounding block.
+          expect(prompt).toContain('## Additional inspiration systems');
+          expect(prompt).toContain('(`bento`)');
+          expect(prompt).toContain('#FAD4C0');
+          expect(prompt).not.toContain('(`organic`)');
         },
       );
     } finally {
@@ -3590,6 +3770,7 @@ describe('chat prompt helpers', () => {
       stablePromptHash: 'hash-a',
       hit: false,
       missReason: 'new-session',
+      changedSections: null,
     });
 
     expect(describeStablePromptCache({
@@ -3600,6 +3781,7 @@ describe('chat prompt helpers', () => {
       stablePromptHash: 'hash-a',
       hit: true,
       missReason: null,
+      changedSections: null,
     });
 
     expect(describeStablePromptCache({
@@ -3610,6 +3792,55 @@ describe('chat prompt helpers', () => {
       stablePromptHash: 'hash-b',
       hit: false,
       missReason: 'stable-prompt-changed',
+      // No section map supplied: report no attribution rather than invent one.
+      changedSections: null,
+    });
+  });
+
+  it('names the drifted sections when a section map is supplied', () => {
+    expect(describeStablePromptCache({
+      isResuming: true,
+      storedStablePromptHash: 'hash-a',
+      currentStableHash: 'hash-b',
+      storedStableSections: { memory: 'm1', skill: 's1' },
+      currentStableSections: { memory: 'm2', skill: 's1' },
+    })).toEqual({
+      stablePromptHash: 'hash-b',
+      hit: false,
+      missReason: 'stable-prompt-changed',
+      changedSections: ['memory'],
+    });
+  });
+
+  it('reports unattributed drift when the prefix moved but no tracked section did', () => {
+    // The hash is the source of truth, so this is a real miss; an empty list
+    // would read as a drift with no cause instead of the coverage gap it is.
+    expect(describeStablePromptCache({
+      isResuming: true,
+      storedStablePromptHash: 'hash-a',
+      currentStableHash: 'hash-b',
+      storedStableSections: { memory: 'm1' },
+      currentStableSections: { memory: 'm1' },
+    })).toMatchObject({
+      missReason: 'stable-prompt-changed',
+      changedSections: ['unattributed'],
+    });
+  });
+
+  it('does not attribute sections for a missing stored hash', () => {
+    // A legacy/reseeded row has no baseline to diff, so every section would
+    // read as "changed" and drown the signal real drift carries.
+    expect(describeStablePromptCache({
+      isResuming: true,
+      storedStablePromptHash: null,
+      currentStableHash: 'hash-b',
+      storedStableSections: null,
+      currentStableSections: { memory: 'm1' },
+    })).toEqual({
+      stablePromptHash: 'hash-b',
+      hit: false,
+      missReason: 'missing-stored-hash',
+      changedSections: null,
     });
   });
 

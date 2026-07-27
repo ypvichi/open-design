@@ -3,7 +3,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
+import { checkCertainExemptConsumption } from "./check-certain-exempt-consumption.ts";
 import { checkCrossAppImports } from "./check-cross-app-imports.ts";
+import { checkPackagedLeafBoundary } from "./check-packaged-leaf-boundary.ts";
 import { checkTsNocheckImports } from "./check-ts-nocheck-imports.ts";
 import { checkDesignSystemManifests } from "./check-design-system-manifests.ts";
 import { checkDesignSystemPackageQuality } from "./check-design-system-package-quality.ts";
@@ -52,6 +54,8 @@ const residualSkippedDirectories = new Set([
   ".od",
   ".od-e2e",
   ".opencode",
+  // Local agent deepwork/worktree scratch (git-ignored; not product source).
+  ".slim",
   ".task",
   ".tmp",
   ".vite",
@@ -499,6 +503,28 @@ async function collectTestLayoutViolations(directory: string): Promise<string[]>
   }
 
   return violations;
+}
+
+async function checkScriptsTestFree(): Promise<boolean> {
+  const scriptsFiles = await collectRepositoryFiles(path.join(repoRoot, "scripts"), testLayoutSkippedDirectories);
+  const violations = scriptsFiles.filter(isScriptTestFile);
+
+  if (violations.length > 0) {
+    console.error(
+      "Root scripts/ is test-free: move behavior-contract coverage to e2e/tests/scripts/ (see e2e/AGENTS.md):",
+    );
+    for (const violation of violations) {
+      console.error(`- ${violation}`);
+    }
+    return false;
+  }
+
+  console.log("Scripts test-free check passed: no test files under root scripts/.");
+  return true;
+}
+
+export function isScriptTestFile(repositoryPath: string): boolean {
+  return /\.test\.[^/]+$/.test(repositoryPath);
 }
 
 async function checkTestLayout(): Promise<boolean> {
@@ -1281,7 +1307,7 @@ async function checkCiTopology(): Promise<boolean> {
       "include: ${{ fromJSON(needs.scopes.outputs.ui_p0_matrix) }}",
       "include: ${{ fromJSON(needs.scopes.outputs.visual_matrix) }}",
       "needs.scopes.outputs.run_ui_p0 == 'true'",
-      "pnpm -C e2e exec tsx scripts/playwright.ts run-ui-group smoke",
+      "pnpm -C e2e exec tsx scripts/playwright.ts run-ui-group critical-extras",
       "pnpm -C e2e exec tsx scripts/playwright.ts run-ui-group ${{ matrix.shard }}",
     ]
       .filter((needle) => !ciWorkflow.includes(needle))
@@ -1300,11 +1326,14 @@ async function checkCiTopology(): Promise<boolean> {
 
 const checks: GuardCheck[] = [
   { name: "residual JavaScript", run: checkResidualJavaScript },
+  { name: "certain-exempt surface consumption", run: checkCertainExemptConsumption },
+  { name: "packaged leaf boundary", run: checkPackagedLeafBoundary },
   { name: "package dependency specs", run: checkPackageDependencySpecs },
   { name: "product neutrality", run: checkProductNeutrality },
   { name: "cross-app imports", run: checkCrossAppImports },
   { name: "@ts-nocheck import resolution", run: checkTsNocheckImports },
   { name: "test layout", run: checkTestLayout },
+  { name: "scripts test-free", run: checkScriptsTestFree },
   { name: "e2e layout", run: checkE2eLayout },
   { name: "web test layout", run: checkWebTestLayout },
   { name: "web import isolation", run: checkWebImportIsolation },
@@ -1342,6 +1371,13 @@ async function runChecks(): Promise<boolean> {
 }
 
 const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
-if (isMain && !(await runChecks())) {
-  process.exitCode = 1;
+if (isMain) {
+  // `--list-checks` is the machine-readable registry of guard check names; the
+  // scope rule-table invariant test resolves `certain` rules' guard fields
+  // against it so a renamed or deleted guard fails CI.
+  if (process.argv[2] === "--list-checks") {
+    for (const check of checks) console.log(check.name);
+  } else if (!(await runChecks())) {
+    process.exitCode = 1;
+  }
 }

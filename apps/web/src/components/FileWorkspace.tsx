@@ -139,7 +139,6 @@ import { useInView } from './plugins-home/useInView';
 import { LiveArtifactBadges } from './LiveArtifactBadges';
 import { MissingBrandFontsBanner } from './MissingBrandFontsBanner';
 import { LibraryPicker } from './LibraryPicker';
-import { PreviewRunStatusBar } from './PreviewRunStatusBar';
 import { QuickSwitcher } from './QuickSwitcher';
 import { SketchEditor } from './SketchEditor';
 import { SketchEnginePrewarm } from './SketchEnginePrewarm';
@@ -2201,7 +2200,10 @@ export function FileWorkspace({
       Array.from(e.dataTransfer?.types ?? []).includes('Files');
     const isAllowedDropTarget = (target: EventTarget | null) => {
       if (!(target instanceof Element)) return false;
-      return Boolean(target.closest('.df-panel, .composer'));
+      // `.qf-insp` is the inspiration picker inside question forms — its
+      // dropzone owns image drops; without this allowance the window-level
+      // `dropEffect = 'none'` below vetoes the drop before it lands.
+      return Boolean(target.closest('.df-panel, .composer, .qf-insp'));
     };
     const onDragOver = (e: DragEvent) => {
       if (!hasFiles(e) || isAllowedDropTarget(e.target)) return;
@@ -2846,12 +2848,6 @@ export function FileWorkspace({
     ) return null;
     return liveArtifactEntries.find((entry) => entry.tabId === activeTab) ?? null;
   }, [activeTab, liveArtifactEntries]);
-
-  // The delivery hint belongs to the main design-preview surface only. Browser,
-  // terminal, questions, design-system, and side-chat tabs carry their own
-  // context and must not inherit status/analytics from the primary chat.
-  const showPreviewRunStatus =
-    activeTab === DESIGN_FILES_TAB || activeLiveArtifact !== null || activeFile !== null;
 
   // Identity-stable props for the memoized FileViewer. Without these, every
   // FileWorkspace state change (closing an adjacent tab, drag hover, launcher
@@ -3903,15 +3899,6 @@ export function FileWorkspace({
             .
           </div>
         )}
-        {showPreviewRunStatus ? (
-          <div className="ws-preview-run-status-slot">
-            <PreviewRunStatusBar
-              projectId={projectId}
-              conversationId={conversationId}
-              messages={messages}
-            />
-          </div>
-        ) : null}
       </div>
       <PageCreatorDialog
         open={pageCreatorOpen}
