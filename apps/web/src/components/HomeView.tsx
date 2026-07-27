@@ -99,6 +99,7 @@ import {
   type HomePromptHandoff,
 } from './home-hero/plugin-authoring';
 import { PluginDetailsModal } from './PluginDetailsModal';
+import { TemplateDetailsModal } from './TemplateDetailsModal';
 import { SkillDetailsModal } from './SkillDetailsModal';
 import { HomeTemplatesReveal } from './HomeTemplatesReveal';
 import { PluginsHomeSection } from './PluginsHomeSection';
@@ -224,7 +225,7 @@ interface Props {
   onSubmit: (
     payload: PluginLoopSubmit,
   ) => Promise<boolean | 'blocked' | void> | boolean | 'blocked' | void;
-  onCreateProject: (input: any) => Promise<boolean> | boolean | void;
+  onCreateProject?: (input: any) => Promise<boolean> | boolean | void | undefined;
   onOpenProject: (id: string, fileName?: string) => void;
   onViewAllProjects: () => void;
   onDeleteProject?: (id: string) => Promise<boolean | void> | boolean | void;
@@ -468,7 +469,7 @@ export function HomeView({
   );
   const [elevenLabsVoicesLoaded, setElevenLabsVoicesLoaded] = useState(false);
   const [elevenLabsVoicesError, setElevenLabsVoicesError] = useState<string | null>(null);
-  const [detailsRecord, setDetailsRecord] = useState<InstalledPluginRecord | null>(null);
+  const [detailsRecord, setDetailsRecord] = useState<InstalledPluginRecord | null | any>(null);
   const [detailsSkill, setDetailsSkill] = useState<SkillSummary | null>(null);
   const [pendingReplacement, setPendingReplacement] = useState<PendingReplacement | null>(null);
   // Surface_view fires when the replacement modal becomes visible. Tied
@@ -495,7 +496,7 @@ export function HomeView({
   // stays distinct from "open the detail modal". plugin_id / plugin_type
   // mirror PluginsView so the two surfaces join on the same keys.
   const handleCommunityOpenDetails = useCallback(
-    (record: InstalledPluginRecord) => {
+    (record: InstalledPluginRecord,type?:string) => {
       const pluginId = record.sourceMarketplaceEntryName ?? record.id;
       const pluginType = record.marketplaceTrust ?? 'official';
       trackCommunityGalleryClick(analytics.track, {
@@ -2257,7 +2258,41 @@ export function HomeView({
       </HomeTemplatesReveal>
 
       <AnimatePresence>
-        {detailsRecord ? (
+        {detailsRecord ? 
+          detailsRecord?.files ?
+          (<TemplateDetailsModal
+             record={detailsRecord}
+             onClose={() => {
+                setDetailsRecord(null);
+             }}
+             onUse={async ()=>{
+              const input = {
+                "name": detailsRecord.name,
+                "skillId": null,
+                "designSystemId": null,//"default",
+                "metadata": {
+                  "kind": "template",
+                  "platform": "responsive",
+                  "platformTargets": [
+                    "responsive"
+                  ],
+                  "animations": false,
+                  "templateId": detailsRecord.id,
+                  "templateLabel": detailsRecord.name,
+                  "nameSource": "user",
+                  "group": "iux"
+                },
+                "pluginId": "od-new-generation",
+                "pluginInputs": {
+                  "artifactKind": "artifact based on a saved template",
+                  "audience": "product and design reviewers",
+                  "topic": detailsRecord.name
+                }
+              }
+              let status = await onCreateProject?.(input);
+             }}
+          />)
+          :(
           <PluginDetailsModal
             record={detailsRecord}
             onClose={() => {

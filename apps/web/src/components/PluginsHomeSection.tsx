@@ -49,7 +49,7 @@ interface Props {
   pendingApplyId: string | null;
   pendingDuplicateId?: string | null;
   pendingShareAction?: { pluginId: string; action: PluginShareAction } | null;
-  onCreateProject: (input: any) => Promise<boolean> | boolean | void;
+  onCreateProject?: (input: any) => Promise<boolean> | boolean | void | undefined;
   onUse: (record: InstalledPluginRecord, action: PluginUseAction) => void;
   onDuplicate?: (record: InstalledPluginRecord) => void;
   onOpenDetails: (record: InstalledPluginRecord) => void;
@@ -661,8 +661,8 @@ interface TemplateRecord {
 interface TemplateCardProps {
   record: TemplateRecord;
   isActive: boolean;
-  onCreateProject: (input: any) => Promise<boolean> | boolean | void;
-  onOpenDetails?: (record: any) => void;
+  onCreateProject?: (input: any) => Promise<boolean> | boolean | void | undefined;
+  onOpenDetails?: (record: any,type?:string) => void;
   onSave?: (record: any) => void;
   layout?: 'rich' | 'gallery';
 }
@@ -706,7 +706,7 @@ function TemplateCard({
       }
     }
     isFinished.current = true;
-    let status = await onCreateProject(input);
+    let status = await onCreateProject?.(input);
     isFinished.current = false;
     // console.log('我拿到创建函数参数了吗？', input);
   }
@@ -723,7 +723,7 @@ function TemplateCard({
           .join(' ')}
         data-template-id={record.id}
         onClick={() => {
-          //onOpenDetails?.(record)
+          onOpenDetails?.(record,'iux')
         }
         }
       >
