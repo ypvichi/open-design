@@ -83,12 +83,12 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Resolve built commit
         run: echo "BUILT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-      # - name: Prepare prerelease release metadata
-      #   id: prerelease
-      #   env:
-      #     GITHUB_SHA: ${{ env.BUILT_SHA }}
-      #     GITHUB_REF_NAME: ${{ inputs.ref != '' && inputs.ref || github.ref_name }}
-      #   run: pnpm exec tools-release prepare prerelease
+      - name: Prepare prerelease release metadata
+        id: prerelease
+        env:
+          GITHUB_SHA: ${{ env.BUILT_SHA }}
+          GITHUB_REF_NAME: ${{ inputs.ref != '' && inputs.ref || github.ref_name }}
+        run: pnpm exec tools-release prepare prerelease
   verify:
     name: Verify build (typecheck + tests)
     needs: metadata
