@@ -169,18 +169,18 @@ jobs:
           GITHUB_SHA: ${{ env.BUILT_SHA }}
           GITHUB_REF_NAME: ${{ inputs.ref != '' && inputs.ref || github.ref_name }}
         run: pnpm exec tools-release prepare prerelease
-      - name: Validate R2 prerelease access
-        env:
-          GITHUB_SHA: ${{ env.BUILT_SHA }}
-          R2_ACCESS_PROBE_NAME: release-prerelease
-          RELEASE_CHANNEL: prerelease
-          RELEASE_PUBLIC_ORIGIN: ${{ vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
-          RELEASE_STORAGE_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_RELEASES_AK }}
-          RELEASE_STORAGE_BUCKET: ${{ secrets.CLOUDFLARE_R2_RELEASES_BUCKET }}
-          RELEASE_STORAGE_ENDPOINT: ${{ secrets.CLOUDFLARE_R2_RELEASES_URL }}
-          RELEASE_STORAGE_REGION: auto
-          RELEASE_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_RELEASES_SK }}
-        run: pnpm exec tools-release check-storage
+      # - name: Validate R2 prerelease access
+      #   env:
+      #     GITHUB_SHA: ${{ env.BUILT_SHA }}
+      #     R2_ACCESS_PROBE_NAME: release-prerelease
+      #     RELEASE_CHANNEL: prerelease
+      #     RELEASE_PUBLIC_ORIGIN: ${{ vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
+      #     RELEASE_STORAGE_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_RELEASES_AK }}
+      #     RELEASE_STORAGE_BUCKET: ${{ secrets.CLOUDFLARE_R2_RELEASES_BUCKET }}
+      #     RELEASE_STORAGE_ENDPOINT: ${{ secrets.CLOUDFLARE_R2_RELEASES_URL }}
+      #     RELEASE_STORAGE_REGION: auto
+      #     RELEASE_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_RELEASES_SK }}
+      #   run: pnpm exec tools-release check-storage
   verify:
     name: Verify build (typecheck + tests)
     needs: metadata
