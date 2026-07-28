@@ -42,8 +42,8 @@ importers:
         specifier: 20.19.39
         version: 20.19.39
       '@zumer/snapdom':
-        specifier: ^2.18.0
-        version: 2.22.0
+        specifier: 2.18.0
+        version: 2.18.0
       tsx:
         specifier: 4.22.3
         version: 4.22.3
@@ -135,7 +135,7 @@ importers:
         specifier: 7.25.0
         version: 7.25.0
       ws:
-        specifier: ^8.21.1
+        specifier: 8.21.1
         version: 8.21.1
     devDependencies:
       '@types/better-sqlite3':
@@ -151,7 +151,7 @@ importers:
         specifier: 20.19.39
         version: 20.19.39
       '@types/ws':
-        specifier: ^8.18.1
+        specifier: 8.18.1
         version: 8.18.1
       typescript:
         specifier: 5.9.3
@@ -358,7 +358,7 @@ importers:
         specifier: 0.36.2
         version: 0.36.2
       lottie-react:
-        specifier: ^2.4.1
+        specifier: 2.4.1
         version: 2.4.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       lucide-react:
         specifier: 1.16.0
@@ -3052,8 +3052,9 @@ packages:
   '@xterm/xterm@5.5.0':
     resolution: {integrity: sha512-hqJHYaQb5OptNunnyAnkHyM8aCjZ1MEIDTQu1iIbbTD/xops91NB5yq1ZK/dC2JDbVWtF23zUtl9JE2NqwT87A==}
 
-  '@zumer/snapdom@2.22.0':
-    resolution: {integrity: sha512-XfOa0pqiRj9+zsrHm5+hLmKMmMuFxIhrmrSrJKMkSf9DFGnDsql89bd4IMFnLMWl1WmW0X5YOjtSZi8jvYkbVw==}
+  '@zumer/snapdom@2.18.0':
+    resolution: {integrity: sha512-6XirrLb+E9fXqPkn31NLeY2mG97stdVJ/FyN8ngq5dflFi48F4+NcVvQ04rlRITCkv88BWUstMH8Lf35rKyBjA==}
+    deprecated: Old versions have known fidelity bugs (text re-wrap, width freezing, KaTeX clipping). Upgrade to ^2.22 — drop-in for any 2.x. https://github.com/zumerlab/snapdom/releases
 
   abbrev@4.0.0:
     resolution: {integrity: sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA==}
@@ -8954,7 +8955,7 @@ snapshots:
 
   '@xterm/xterm@5.5.0': {}
 
-  '@zumer/snapdom@2.22.0': {}
+  '@zumer/snapdom@2.18.0': {}
 
   abbrev@4.0.0: {}
 

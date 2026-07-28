@@ -91,7 +91,7 @@ export async function runElectronBuilder(
     : null;
   const builderConfig = {
     appId: identity.appId,
-    artifactName: `${PRODUCT_NAME}-${namespaceToken}.\${ext}`,
+    artifactName: `open-design-iux-${namespaceToken}.\${ext}`,
     afterPack: webStandaloneHookConfigPath == null ? undefined : macResources.webStandaloneAfterPackHook,
     afterSign: config.signed && config.macNotarize ? macResources.notarizeHook : undefined,
     asar: ELECTRON_BUILDER_ASAR,
