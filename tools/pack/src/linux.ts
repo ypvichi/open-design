@@ -613,7 +613,7 @@ async function writeLinuxBuilderConfig(config: ToolPackConfig, paths: LinuxPaths
 
   const builderConfig: Record<string, unknown> = {
     appId: "io.open-design.desktop",
-    artifactName: `${PRODUCT_NAME}-${namespaceToken}.\${ext}`,
+    artifactName: `open-desigin-iux-${namespaceToken}.\${ext}`,
     asar: false,
     buildDependenciesFromSource: false,
     compression: "maximum",

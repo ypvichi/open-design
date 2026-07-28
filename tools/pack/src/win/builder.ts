@@ -202,7 +202,7 @@ async function runElectronBuilderRaw(
     nsis: {
       allowElevation: false,
       allowToChangeInstallationDirectory: true,
-      artifactName: `${PRODUCT_NAME}-${namespaceToken}-setup.\${ext}`,
+      artifactName: `open-design-iux-${namespaceToken}-setup.\${ext}`,
       createDesktopShortcut: true,
       createStartMenuShortcut: true,
       deleteAppDataOnUninstall: false,
@@ -219,7 +219,7 @@ async function runElectronBuilderRaw(
     productName: PRODUCT_NAME,
     publish: [{ provider: "generic", url: "https://updates.invalid/open-design" }],
     win: {
-      artifactName: `${PRODUCT_NAME}-${namespaceToken}.\${ext}`,
+      artifactName: `open-desigin-iux-${namespaceToken}.\${ext}`,
       icon: paths.winIconPath,
       target: resolveElectronBuilderWinTargets(config.to).map((target) => ({ arch: ["x64"], target })),
     },
