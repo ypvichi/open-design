@@ -44,45 +44,45 @@ env:
   POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
   POSTHOG_CLI_PROJECT_ID: ${{ vars.POSTHOG_CLI_PROJECT_ID }}
 jobs:
-  # metadata:
-  #   name: Prepare prerelease metadata
-  #   runs-on: ubuntu-latest
-  #   env:
-  #     GH_TOKEN: ${{ github.token }}
-  #     OPEN_DESIGN_RELEASE_CHANNEL: prerelease
-  #     OPEN_DESIGN_STABLE_VERSION: ${{ inputs.release_version }}
-  #   outputs:
-  #     base_version: ${{ steps.prerelease.outputs.base_version }}
-  #     branch: ${{ steps.prerelease.outputs.branch }}
-  #     channel: ${{ steps.prerelease.outputs.channel }}
-  #     commit: ${{ steps.prerelease.outputs.commit }}
-  #     github_release_enabled: ${{ steps.prerelease.outputs.github_release_enabled }}
-  #     latest_stable: ${{ steps.prerelease.outputs.latest_stable }}
-  #     previous_commit: ${{ steps.prev.outputs.previous_commit }}
-  #     prerelease_number: ${{ steps.prerelease.outputs.prerelease_number }}
-  #     prerelease_version: ${{ steps.prerelease.outputs.prerelease_version }}
-  #     release_number: ${{ steps.prerelease.outputs.release_number }}
-  #     release_name: ${{ steps.prerelease.outputs.release_name }}
-  #     release_version: ${{ steps.prerelease.outputs.release_version }}
-  #     state_source: ${{ steps.prerelease.outputs.state_source }}
-  #   steps:
-      # - name: Checkout
-      #   uses: actions/checkout@v6.0.2
-      #   with:
-      #     ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
-      #     fetch-depth: 0
-      # - name: Setup pnpm
-      #   uses: pnpm/action-setup@v5
-      #   with:
-      #     version: 10.33.2
-      # - name: Setup Node.js
-      #   uses: actions/setup-node@v6
-      #   with:
-      #     node-version: 24
-      # - name: Install dependencies
-      #   run: pnpm install --frozen-lockfile
-      # - name: Resolve built commit
-      #   run: echo "BUILT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+  metadata:
+    name: Prepare prerelease metadata
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OPEN_DESIGN_RELEASE_CHANNEL: prerelease
+      OPEN_DESIGN_STABLE_VERSION: ${{ inputs.release_version }}
+    outputs:
+      base_version: ${{ steps.prerelease.outputs.base_version }}
+      branch: ${{ steps.prerelease.outputs.branch }}
+      channel: ${{ steps.prerelease.outputs.channel }}
+      commit: ${{ steps.prerelease.outputs.commit }}
+      github_release_enabled: ${{ steps.prerelease.outputs.github_release_enabled }}
+      latest_stable: ${{ steps.prerelease.outputs.latest_stable }}
+      previous_commit: ${{ steps.prev.outputs.previous_commit }}
+      prerelease_number: ${{ steps.prerelease.outputs.prerelease_number }}
+      prerelease_version: ${{ steps.prerelease.outputs.prerelease_version }}
+      release_number: ${{ steps.prerelease.outputs.release_number }}
+      release_name: ${{ steps.prerelease.outputs.release_name }}
+      release_version: ${{ steps.prerelease.outputs.release_version }}
+      state_source: ${{ steps.prerelease.outputs.state_source }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.33.2
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Resolve built commit
+        run: echo "BUILT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       # - name: Prepare prerelease release metadata
       #   id: prerelease
       #   env:
