@@ -142,12 +142,13 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
   const outputDir = join(config.workspaceRoot, ".output");
   await mkdir(outputDir, { recursive: true });
   const winVersion = await readPackagedVersion(config);
+  const winArch = "x64";
   if (hasNsisTarget && (await pathExists(paths.setupPath))) {
-    const outputExeName = `${PRODUCT_NAME}-IUX-setup-${winVersion}.exe`;
+    const outputExeName = `open-design-iux-${winVersion}-win-${winArch}-setup.exe`;
     await cp(paths.setupPath, join(outputDir, outputExeName), { force: true });
   }
   if (hasZipTarget && (await pathExists(paths.setupZipPath))) {
-    const outputZipName = `${PRODUCT_NAME}-IUX-setup-${winVersion}.zip`;
+    const outputZipName = `open-design-iux-${winVersion}-win-${winArch}-setup.zip`;
     await cp(paths.setupZipPath, join(outputDir, outputZipName), { force: true });
   }
 

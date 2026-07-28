@@ -723,7 +723,8 @@ export async function packLinux(config: ToolPackConfig): Promise<LinuxPackResult
       const outputDir = join(config.workspaceRoot, ".output");
       await mkdir(outputDir, { recursive: true });
       const linuxVersion = await readPackagedVersion(config);
-      const outputAppImageName = `Open-Design-${linuxVersion}.AppImage`;
+      const linuxArch = "x64";
+      const outputAppImageName = `open-design-iux-${linuxVersion}-linux-${linuxArch}.AppImage`;
       await cp(appImagePath, join(outputDir, outputAppImageName), { force: true });
     }
     return {
@@ -754,7 +755,8 @@ export async function packLinux(config: ToolPackConfig): Promise<LinuxPackResult
     const outputDir = join(config.workspaceRoot, ".output");
     await mkdir(outputDir, { recursive: true });
     const linuxVersion = await readPackagedVersion(config);
-    const outputAppImageName = `Open-Design-${linuxVersion}.AppImage`;
+    const linuxArch = "x64";
+    const outputAppImageName = `open-design-iux-${linuxVersion}-linux-${linuxArch}.AppImage`;
     await cp(appImagePath, join(outputDir, outputAppImageName), { force: true });
   }
   return {

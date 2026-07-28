@@ -74,12 +74,13 @@ export async function packMac(config: ToolPackConfig): Promise<MacPackResult> {
   const outputDir = join(config.workspaceRoot, ".output");
   await mkdir(outputDir, { recursive: true });
   const version = await readPackagedVersion(config);
+  const macArch = process.arch === "arm64" ? "arm64" : "x64";
   if (artifacts.dmgPath != null) {
-    const outputDmgName = `${PRODUCT_NAME}-${version}.dmg`;
+    const outputDmgName = `open-design-iux-${version}-mac-${macArch}.dmg`;
     await cp(artifacts.dmgPath, join(outputDir, outputDmgName), { force: true });
   }
   if (artifacts.zipPath != null) {
-    const outputZipName = `${PRODUCT_NAME}-${version}.zip`;
+    const outputZipName = `open-design-iux-${version}-mac-${macArch}.zip`;
     await cp(artifacts.zipPath, join(outputDir, outputZipName), { force: true });
   }
 
