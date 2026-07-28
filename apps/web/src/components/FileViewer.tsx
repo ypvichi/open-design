@@ -13185,7 +13185,7 @@ function HtmlViewer({
                           >
                             <span className="share-menu-icon"><RemixIcon name="file-copy-line" size={15} /></span>
                             <span className="share-menu-text">
-                              <span>复制IUX链接</span>
+                              <span>复制 IUX 链接</span>
                               <small></small>
                               {/* {shareLinkStatusHint ? (
                                 <small>{shareLinkStatusHint}</small>
