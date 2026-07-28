@@ -38,7 +38,7 @@
     "@open-design/tools-release": "workspace:*",
     "@open-design/tools-serve": "workspace:*",
     "@types/node": "20.19.39",
-    "@zumer/snapdom": "^2.18.0",
+    "@zumer/snapdom": "2.18.0",
     "tsx": "4.22.3",
     "typescript": "5.9.3"
   },

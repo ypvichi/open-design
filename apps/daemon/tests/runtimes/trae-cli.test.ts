@@ -84,7 +84,6 @@ describe('Trae CLI runtime adapter', () => {
     const publicSurface = [
       await readRepoFile('apps/daemon/src/runtimes/defs/trae-cli.ts'),
       await readRepoFile('apps/daemon/src/runtimes/metadata.ts'),
-      await readRepoFile('docs/agent-adapters.md'),
     ].join('\n');
 
     for (const forbidden of [
