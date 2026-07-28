@@ -1,4 +1,4 @@
-name: release-prerelease
+name: release-prerelease-iux
 on:
   workflow_dispatch:
     inputs:
