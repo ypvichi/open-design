@@ -595,25 +595,34 @@ let stateSource = channel === "prerelease" ? "R2 metadata.json" : "GitHub Releas
 
 if (channel === "prerelease") {
   const metadataUrl = process.env.OPEN_DESIGN_PRERELEASE_METADATA_URL;
-  if (metadataUrl == null || metadataUrl.length === 0) {
-    fail("OPEN_DESIGN_PRERELEASE_METADATA_URL is required for prerelease channel");
-  }
-  validateHttpsUrl(metadataUrl, "OPEN_DESIGN_PRERELEASE_METADATA_URL");
 
   let nextPrereleaseNumber = 1;
   let latestPrerelease: ParsedPrereleaseVersion | null = null;
-  const latestMetadataJson = await fetchOptionalHttpsText(metadataUrl);
-  if (latestMetadataJson == null) {
+
+  if (metadataUrl == null || metadataUrl.length === 0) {
     latestPrerelease = {
       baseVersion: packagedVersion,
       prereleaseNumber: 0,
       prereleaseVersion: `${packagedVersion}-prerelease.0`,
     };
-    stateSource = "missing R2 metadata.json fallback prerelease.0";
-    log("R2 prerelease metadata.json: not found; using prerelease.0 fallback");
+    stateSource = "missing OPEN_DESIGN_PRERELEASE_METADATA_URL fallback prerelease.0";
+    log("OPEN_DESIGN_PRERELEASE_METADATA_URL: not set; using prerelease.0 fallback");
   } else {
-    latestPrerelease = parsePrereleaseMetadataJson(latestMetadataJson);
-    log(`R2 prerelease metadata.json version: ${latestPrerelease.prereleaseVersion}`);
+    validateHttpsUrl(metadataUrl, "OPEN_DESIGN_PRERELEASE_METADATA_URL");
+
+    const latestMetadataJson = await fetchOptionalHttpsText(metadataUrl);
+    if (latestMetadataJson == null) {
+      latestPrerelease = {
+        baseVersion: packagedVersion,
+        prereleaseNumber: 0,
+        prereleaseVersion: `${packagedVersion}-prerelease.0`,
+      };
+      stateSource = "missing R2 metadata.json fallback prerelease.0";
+      log("R2 prerelease metadata.json: not found; using prerelease.0 fallback");
+    } else {
+      latestPrerelease = parsePrereleaseMetadataJson(latestMetadataJson);
+      log(`R2 prerelease metadata.json version: ${latestPrerelease.prereleaseVersion}`);
+    }
   }
 
   const existingBase = parseReleaseBaseVersion(latestPrerelease.baseVersion);
