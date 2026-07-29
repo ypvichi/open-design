@@ -238,13 +238,24 @@ jobs:
             ${{ runner.temp }}/mac-framework-diagnostics.txt
           if-no-files-found: warn
 
-      - name: Upload mac arm64 installer artifact
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.release_version }}"
+          ASSETS_DIR="$RUNNER_TEMP/release-assets"
+          mkdir -p "$ASSETS_DIR"
+          SDIR="$RUNNER_TEMP/tools-pack/out/mac/namespaces/release-stable"
+          cp "$SDIR/dmg/Open Design-release-stable.dmg" "$ASSETS_DIR/Open Design-$VERSION-mac-arm64.dmg"
+          cp "$SDIR/zip/Open Design-release-stable.zip" "$ASSETS_DIR/Open Design-$VERSION-mac-arm64.zip"
+          cd "$ASSETS_DIR"
+          shasum -a 256 "Open Design-$VERSION-mac-arm64.dmg" > "Open Design-$VERSION-mac-arm64.dmg.sha256"
+          shasum -a 256 "Open Design-$VERSION-mac-arm64.zip" > "Open Design-$VERSION-mac-arm64.zip.sha256"
+
+      - name: Upload mac arm64 release assets
         uses: actions/upload-artifact@v7
         with:
-          name: open-design-release-mac-arm64-installer
-          path: |
-            ${{ runner.temp }}/tools-pack/out/mac/namespaces/release-stable/dmg/Open Design-release-stable.dmg
-            ${{ runner.temp }}/tools-pack/out/mac/namespaces/release-stable/zip/Open Design-release-stable.zip
+          name: open-design-release-mac-arm64-assets
+          path: ${{ runner.temp }}/release-assets
           if-no-files-found: error
           retention-days: 1
 
@@ -309,13 +320,24 @@ jobs:
             --signed \
             --notarize
 
-      - name: Upload mac intel installer artifact
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.release_version }}"
+          ASSETS_DIR="$RUNNER_TEMP/release-assets"
+          mkdir -p "$ASSETS_DIR"
+          SDIR="$RUNNER_TEMP/tools-pack/out/mac/namespaces/release-stable-intel"
+          cp "$SDIR/dmg/Open Design-release-stable-intel.dmg" "$ASSETS_DIR/Open Design-$VERSION-mac-x64.dmg"
+          cp "$SDIR/zip/Open Design-release-stable-intel.zip" "$ASSETS_DIR/Open Design-$VERSION-mac-x64.zip"
+          cd "$ASSETS_DIR"
+          shasum -a 256 "Open Design-$VERSION-mac-x64.dmg" > "Open Design-$VERSION-mac-x64.dmg.sha256"
+          shasum -a 256 "Open Design-$VERSION-mac-x64.zip" > "Open Design-$VERSION-mac-x64.zip.sha256"
+
+      - name: Upload mac intel release assets
         uses: actions/upload-artifact@v7
         with:
-          name: open-design-release-mac-intel-installer
-          path: |
-            ${{ runner.temp }}/tools-pack/out/mac/namespaces/release-stable-intel/dmg/Open Design-release-stable-intel.dmg
-            ${{ runner.temp }}/tools-pack/out/mac/namespaces/release-stable-intel/zip/Open Design-release-stable-intel.zip
+          name: open-design-release-mac-intel-assets
+          path: ${{ runner.temp }}/release-assets
           if-no-files-found: error
           retention-days: 1
 
@@ -472,13 +494,27 @@ jobs:
           }
           "actionsCachePrefix=$prefix kept=$([Math]::Min($caches.Count, $keep)) deleted=$($stale.Count)"
 
-      - name: Upload windows installer artifact
+      - name: Prepare release assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $VERSION = "${{ inputs.release_version }}"
+          $ASSETS_DIR = "${{ runner.temp }}/release-assets"
+          New-Item -ItemType Directory -Force -Path $ASSETS_DIR | Out-Null
+          $SDIR = "${{ runner.temp }}/tools-pack/out/win/namespaces/release-stable-win/builder"
+          Copy-Item "$SDIR/Open Design-release-stable-win-setup.exe" "$ASSETS_DIR/Open Design-$VERSION-win-x64-setup.exe"
+          Copy-Item "$SDIR/Open Design-release-stable-win-portable.zip" "$ASSETS_DIR/Open Design-$VERSION-win-x64-portable.zip"
+          Set-Location $ASSETS_DIR
+          $setupHash = (Get-FileHash -Path "Open Design-$VERSION-win-x64-setup.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$setupHash  Open Design-$VERSION-win-x64-setup.exe" | Set-Content -Path "Open Design-$VERSION-win-x64-setup.exe.sha256"
+          $zipHash = (Get-FileHash -Path "Open Design-$VERSION-win-x64-portable.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$zipHash  Open Design-$VERSION-win-x64-portable.zip" | Set-Content -Path "Open Design-$VERSION-win-x64-portable.zip.sha256"
+
+      - name: Upload windows release assets
         uses: actions/upload-artifact@v7
         with:
-          name: open-design-release-win-installer
-          path: |
-            ${{ runner.temp }}/tools-pack/out/win/namespaces/release-stable-win/builder/Open Design-release-stable-win-setup.exe
-            ${{ runner.temp }}/tools-pack/out/win/namespaces/release-stable-win/builder/Open Design-release-stable-win-portable.zip
+          name: open-design-release-win-assets
+          path: ${{ runner.temp }}/release-assets
           if-no-files-found: error
           retention-days: 1
 
@@ -521,11 +557,22 @@ jobs:
             --containerized \
             --json
 
-      - name: Upload linux installer artifact
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.release_version }}"
+          ASSETS_DIR="$RUNNER_TEMP/release-assets"
+          mkdir -p "$ASSETS_DIR"
+          SDIR="$RUNNER_TEMP/tools-pack/out/linux/namespaces/release-stable-linux/builder"
+          cp "$SDIR/Open Design-release-stable-linux.AppImage" "$ASSETS_DIR/Open Design-$VERSION-linux-x64.AppImage"
+          cd "$ASSETS_DIR"
+          sha256sum "Open Design-$VERSION-linux-x64.AppImage" > "Open Design-$VERSION-linux-x64.AppImage.sha256"
+
+      - name: Upload linux release assets
         uses: actions/upload-artifact@v7
         with:
-          name: open-design-release-linux-installer
-          path: ${{ runner.temp }}/tools-pack/out/linux/namespaces/release-stable-linux/builder/Open Design-release-stable-linux.AppImage
+          name: open-design-release-linux-assets
+          path: ${{ runner.temp }}/release-assets
           if-no-files-found: error
           retention-days: 1
 
@@ -568,56 +615,30 @@ jobs:
             exit 1
           fi
 
-      - name: Download mac arm64 installer
+      - name: Download mac arm64 assets
         uses: actions/download-artifact@v8
         with:
-          name: open-design-release-mac-arm64-installer
-          path: ${{ runner.temp }}/release-artifacts
+          name: open-design-release-mac-arm64-assets
+          path: ${{ runner.temp }}/release-assets
 
-      - name: Download mac intel installer
+      - name: Download mac intel assets
         uses: actions/download-artifact@v8
         with:
-          name: open-design-release-mac-intel-installer
-          path: ${{ runner.temp }}/release-artifacts
+          name: open-design-release-mac-intel-assets
+          path: ${{ runner.temp }}/release-assets
 
-      - name: Download windows installer
+      - name: Download windows assets
         uses: actions/download-artifact@v8
         with:
-          name: open-design-release-win-installer
-          path: ${{ runner.temp }}/release-artifacts
+          name: open-design-release-win-assets
+          path: ${{ runner.temp }}/release-assets
 
-      - name: Download linux installer
+      - name: Download linux assets
         if: needs.build_linux.result == 'success'
         uses: actions/download-artifact@v8
         with:
-          name: open-design-release-linux-installer
-          path: ${{ runner.temp }}/release-artifacts
-
-      - name: Prepare release assets
-        run: |
-          set -euo pipefail
-          VERSION="${{ inputs.release_version }}"
-          SRC="$RUNNER_TEMP/release-artifacts"
-          OUT="$RUNNER_TEMP/github-release-assets"
-          mkdir -p "$OUT"
-
-          cp "$SRC/Open Design-release-stable.dmg" "$OUT/Open Design-$VERSION-mac-arm64.dmg"
-          cp "$SRC/Open Design-release-stable.zip" "$OUT/Open Design-$VERSION-mac-arm64.zip"
-          cp "$SRC/Open Design-release-stable-intel.dmg" "$OUT/Open Design-$VERSION-mac-x64.dmg"
-          cp "$SRC/Open Design-release-stable-intel.zip" "$OUT/Open Design-$VERSION-mac-x64.zip"
-          cp "$SRC/Open Design-release-stable-win-setup.exe" "$OUT/Open Design-$VERSION-win-x64-setup.exe"
-          cp "$SRC/Open Design-release-stable-win-portable.zip" "$OUT/Open Design-$VERSION-win-x64-portable.zip"
-          if [ -f "$SRC/Open Design-release-stable-linux.AppImage" ]; then
-            cp "$SRC/Open Design-release-stable-linux.AppImage" "$OUT/Open Design-$VERSION-linux-x64.AppImage"
-          fi
-
-          cd "$OUT"
-          for f in *; do
-            sha256sum "$f" > "$f.sha256"
-          done
-
-          echo "Release assets:"
-          ls -la "$OUT"
+          name: open-design-release-linux-assets
+          path: ${{ runner.temp }}/release-assets
 
       - name: Create draft release with tag
         id: create_release
@@ -635,7 +656,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION_TAG="v${{ inputs.release_version }}"
-          gh release upload "$VERSION_TAG" "$RUNNER_TEMP/github-release-assets"/*
+          gh release upload "$VERSION_TAG" "$RUNNER_TEMP/release-assets"/*
 
       - name: Promote draft to published latest
         run: |
