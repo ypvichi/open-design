@@ -219,7 +219,7 @@ async function runElectronBuilderRaw(
     productName: PRODUCT_NAME,
     publish: [{ provider: "generic", url: "https://updates.invalid/open-design" }],
     win: {
-      artifactName: `open-desigin-iux-${namespaceToken}.\${ext}`,
+      artifactName: `open-design-iux-${namespaceToken}.\${ext}`,
       icon: paths.winIconPath,
       target: resolveElectronBuilderWinTargets(config.to).map((target) => ({ arch: ["x64"], target })),
     },
