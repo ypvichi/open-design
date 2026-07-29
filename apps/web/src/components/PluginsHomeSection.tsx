@@ -209,18 +209,20 @@ export function PluginsHomeSection({
               // The Saved collection lives on the rich management surface
               // (PluginsView). The minimal Community gallery has no per-card
               // save affordance, so the orthogonal Saved chip is hidden there.
-              showSaved={cardLayout === 'rich'}
+              showSaved={false}
               showIux
-              iuxCount={savedList.length}
+              iuxCount={Number(iuxTemplates?.length)}
               iuxActive={mode === 'iux'}
               savedCount={savedList.length}
               savedActive={mode === 'saved'}
               onToggleSaved={() =>
                 setMode(mode === 'saved' ? 'all' : 'saved')
               }
-              onToggleIux={() =>
-                setMode(mode === 'iux' ? 'all' : 'iux')
-              }
+              onToggleIux={() => {
+                //setMode(mode === 'iux' ? 'all' : 'iux')
+                handlePickCategory(null);
+                setMode('iux');
+              }}
               showAll
               query={query}
               onQueryChange={setQuery}
@@ -391,7 +393,7 @@ function CategoryRow({
           >
             <Icon name="star" size={11} />
             <span>
-              IUX Group
+              用户体验部
               {/* {t('pluginsHome.featured')} */}
             </span>
             <span className="plugins-home__chip-count">{iuxCount}</span>
@@ -416,7 +418,7 @@ function CategoryRow({
             <span className="plugins-home__chip-count">{savedCount}</span>
           </button>
         ) : null}
-        {showAll ? (
+        {/* {showAll ? (
           <CategoryPill
             slug={null}
             label={t('common.all')}
@@ -425,7 +427,7 @@ function CategoryRow({
             onPick={onPick}
             variant="all"
           />
-        ) : null}
+        ) : null} */}
         {options.map((opt) => (
           <CategoryPill
             key={opt.slug}

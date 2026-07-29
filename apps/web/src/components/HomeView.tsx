@@ -2256,6 +2256,7 @@ export function HomeView({
           iuxTemplates={iuxTemplates}
           plugins={plugins}
           loading={pluginsLoading}
+          title={'项目广场'}
           activePluginId={active?.record.id ?? null}
           pendingApplyId={pendingApplyId}
           pendingDuplicateId={pendingDuplicatePluginId}

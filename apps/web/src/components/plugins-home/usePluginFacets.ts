@@ -175,16 +175,17 @@ export function usePluginFacets({
   }, [iuxTemplates,mode, savedList, orderedPlugins, selection, query, locale, sortOrder]);
 
   function pickCategory(slug: string | null): void {
-    if (mode !== 'all') setMode('all');
+    //if (mode !== 'all') setMode('all');
+    if(mode === 'iux') setMode('all');
     setSelection((prev) => ({
-      category: prev.category === slug ? null : slug,
+      category: slug,//prev.category === slug ? null : slug,
       subcategory: null,
     }));
   }
 
   function pickSubcategory(slug: string | null): void {
-    if (mode === 'saved') setMode('all');
-    if (mode === 'iux') setMode('all');
+    // if (mode === 'saved') setMode('all');
+    // if (mode === 'iux') setMode('all');
     setSelection((prev) => ({
       ...prev,
       subcategory: prev.subcategory === slug ? null : slug,

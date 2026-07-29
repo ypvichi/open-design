@@ -6191,6 +6191,7 @@ function HtmlViewer({
       | 'edit'
       | 'present_dropdown'
       | 'download_dropdown'
+      | 'download_dropdown_pixso'
       | 'share_dropdown'
       | 'settings',
   ) => {
@@ -6281,6 +6282,7 @@ function HtmlViewer({
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
   const [deployMenuOpen, setDeployMenuOpen] = useState(false);
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
+  const [downloadMenuOpenForPixso, setDownloadMenuOpenForPixso] = useState(false);
   // False when closed; otherwise records which entry opened the modal so the
   // surface_view impression can carry entry_from.
   const [versionModalOpen, setVersionModalOpen] = useState<false | 'toolbar' | 'more_menu'>(false);
@@ -10402,17 +10404,19 @@ function HtmlViewer({
   }, [agentToolsOpen]);
 
   useEffect(() => {
-    if (!deployMenuOpen && !downloadMenuOpen) return;
+    if (!deployMenuOpen && !downloadMenuOpen && !downloadMenuOpenForPixso) return;
     const onDocClick = (e: MouseEvent) => {
       if (!shareRef.current) return;
       if (shareRef.current.contains(e.target as Node)) return;
       setDeployMenuOpen(false);
       setDownloadMenuOpen(false);
+      setDownloadMenuOpenForPixso(false)
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       setDeployMenuOpen(false);
       setDownloadMenuOpen(false);
+      setDownloadMenuOpenForPixso(false)
     };
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onKey);
@@ -10420,7 +10424,7 @@ function HtmlViewer({
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('keydown', onKey);
     };
-  }, [deployMenuOpen, downloadMenuOpen]);
+  }, [deployMenuOpen, downloadMenuOpen,downloadMenuOpenForPixso]);
 
   useEffect(() => {
     if (!inTabPresent) return;
@@ -10774,7 +10778,7 @@ function HtmlViewer({
       const cancelLabel = '';//iuxLink?'取消':'';
       if (resp.ok){
         setExportToast({
-          message:cancelLabel+'发布成功!',
+          message:cancelLabel+'分享成功!',
           tone: 'success',
         });
         //if(!iuxLink){
@@ -10786,7 +10790,7 @@ function HtmlViewer({
         // }
       }else{
         setExportToast({
-          message:cancelLabel+'发布失败!',
+          message:cancelLabel+'分享失败!',
           tone: 'error',
         });
       }
@@ -11559,6 +11563,7 @@ function HtmlViewer({
     setExportReadyNudge(false);
     markExportReadyNudgeSeen(projectId, file.name);
     setDownloadMenuOpen(false);
+    setDownloadMenuOpenForPixso(false);
     setDeployMenuOpen(true);
   }, [shareRequest?.nonce, canShare, projectId, file.name]);
 
@@ -11606,13 +11611,23 @@ function HtmlViewer({
     setExportReadyNudge(false);
     markExportReadyNudgeSeen(projectId, file.name);
     setDeployMenuOpen(false);
+    setDownloadMenuOpenForPixso(false);
     setDownloadMenuOpen((v) => !v);
+  };
+  const openDownloadMenuForPixso = () => {
+    fireArtifactHeaderClick('download_dropdown_pixso');
+    setExportReadyNudge(false);
+    markExportReadyNudgeSeen(projectId, file.name);
+    setDeployMenuOpen(false);
+    setDownloadMenuOpen(false);
+    setDownloadMenuOpenForPixso((v) => !v);
   };
   const openDeployMenu = () => {
     fireArtifactHeaderClick('share_dropdown');
     setExportReadyNudge(false);
     markExportReadyNudgeSeen(projectId, file.name);
     setDownloadMenuOpen(false);
+    setDownloadMenuOpenForPixso(false);
     setDeployMenuOpen((v) => {
       if(!v){
         checkIuxLink()
@@ -13156,7 +13171,6 @@ function HtmlViewer({
                               //   if (!ok) throw new Error('copy_share_link_failed');
                               // });
                             }}
-                            style={{color:'#2080F7'}}
                           >
                             <span className="share-menu-icon"><RemixIcon name="file-copy-line" size={15} /></span>
                             <span className="share-menu-text">
@@ -13172,7 +13186,7 @@ function HtmlViewer({
                             type="button"
                             className="share-menu-item"
                             role="menuitem"
-                            title={'修改文件后，需重新发布到IUX Group更新链接'}
+                            title={'修改文件后，需重新分享更新链接'}
                             onClick={() => {
                               copyLocalShareLink(iuxLink);
                               // if (!canCopyShareLink || !sharePageUrl) return;
@@ -13181,11 +13195,10 @@ function HtmlViewer({
                               //   if (!ok) throw new Error('copy_share_link_failed');
                               // });
                             }}
-                            style={{color:'#2080F7'}}
                           >
                             <span className="share-menu-icon"><RemixIcon name="file-copy-line" size={15} /></span>
                             <span className="share-menu-text">
-                              <span>复制 IUX 链接</span>
+                              <span>复制项目广场链接</span>
                               <small></small>
                               {/* {shareLinkStatusHint ? (
                                 <small>{shareLinkStatusHint}</small>
@@ -13241,10 +13254,10 @@ function HtmlViewer({
                           </button>
                         </>
                       ) : null} */}
-                      <div className="share-menu-divider" />
+                      {/* <div className="share-menu-divider" />
                       <div className="share-menu-section-label" role="presentation">
                         {t('fileViewer.shareMenuPublishOnline')}
-                      </div>
+                      </div> */}
                       {/* <button
                           type="button"
                           className="share-menu-item"
@@ -13266,12 +13279,12 @@ function HtmlViewer({
                           onClick={() => {
                             void openIuxModal('iux-group');
                           }}
-                          style={{color:'#2080F7'}}
+                          // style={{color:'#2080F7'}}
                         >
                           <span className="share-menu-icon">
                             <RemixIcon name={deployActionIconFor(CLOUDFLARE_PAGES_PROVIDER_ID)} size={15} />
                           </span>
-                          <span>发布到 IUX Group</span>
+                          <span>分享到项目广场</span>
                         </button>
                       {/* {DEPLOY_PROVIDER_OPTIONS.map((option) => (
                         <button
@@ -13321,6 +13334,45 @@ function HtmlViewer({
                   ) : null}
                 </div>
               ) : null}
+              <div className="share-menu chrome-share-menu">
+                  <button
+                    type="button"
+                    className="chrome-action chrome-action-secondary chrome-action-with-label chrome-action-text-only"
+                    aria-haspopup="menu"
+                    aria-expanded={downloadMenuOpenForPixso}
+                    onClick={openDownloadMenuForPixso}
+                  >
+                    <span>推送</span>
+                  </button>
+                  {downloadMenuOpenForPixso ? (
+                    <div className="share-menu-popover" role="menu">
+                  <button
+                    type="button"
+                    className="share-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setDownloadMenuOpen(false);
+                      triggerPixsoExport();
+                    }}
+                  >
+                    <span className="share-menu-icon"><RemixIcon name="file-code-line" size={15} /></span>
+                    <span>导入到 Pixso</span>
+                  </button>
+                  {/* <button
+                    type="button"
+                    className="share-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setDownloadMenuOpen(false);
+                      triggerPixsoExport(true);
+                    }}
+                  >
+                    <span className="share-menu-icon"><RemixIcon name="file-code-line" size={15} /></span>
+                    <span>导入到 Pixso ( 智能拆分)</span>
+                  </button> */}
+                </div>
+                ) : null}
+              </div>
               {canDownload ? (
                 <div className="share-menu chrome-share-menu">
                   <button
@@ -13337,32 +13389,6 @@ function HtmlViewer({
                   </button>
                   {downloadMenuOpen ? (
                     <div className="share-menu-popover" role="menu">
-                  <button
-                    type="button"
-                    className="share-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setDownloadMenuOpen(false);
-                      triggerPixsoExport();
-                    }}
-                    style={{color:'#2080F7'}}
-                  >
-                    <span className="share-menu-icon"><RemixIcon name="file-code-line" size={15} /></span>
-                    <span>导入到 Pixso</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="share-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setDownloadMenuOpen(false);
-                      triggerPixsoExport(true);
-                    }}
-                    style={{color:'#2080F7'}}
-                  >
-                    <span className="share-menu-icon"><RemixIcon name="file-code-line" size={15} /></span>
-                    <span>导入到 Pixso ( 智能拆分)</span>
-                  </button>
                   <button
                     type="button"
                     className="share-menu-item"
@@ -14233,27 +14259,27 @@ function HtmlViewer({
             <div className="deploy-flow-modal__scroll">
               <div className="modal-head">
                 {/* <div className="kicker">{deployModalKicker}</div> */}
-                <h2>发布到 IUX Group</h2>
+                <h2>分享到项目广场</h2>
                 <p className="subtitle">
-                  把HTML文件发布到公司内网平台，方便在线分享预览
+                  把项目文件发布到项目广场，方便其他同事预览复用
                 </p>
               </div>
               <div className="deploy-form">
               <label className="deploy-provider-field">
-                <span className="deploy-field-title">{'发布平台'}</span>
-                <select
+                {/* <span className="deploy-field-title">{'发布平台'}</span> */}
+                {/* <select
                   disabled
                 >
                     <option value={'ai-builder-web'}>
                        AI Builder Web
                     </option>
-                </select>
+                </select> */}
               </label>
               {iuxLink?
               <div className={`deploy-result-block ${deployResultState('ready')}`}>
                   <div className="deploy-result-summary">
                     <div className="deploy-result-summary-head">
-                      <div className="deploy-result-label">{'发布链接'}</div>
+                      <div className="deploy-result-label">{'分享链接'}</div>
                       <div className={`deploy-result-badge ${deployResultState('ready')}`}>
                         {statusLabelFor(deployResultState('ready'))}
                       </div>
@@ -14265,7 +14291,6 @@ function HtmlViewer({
                                 className="deploy-result-url"
                                 href={iuxLink}
                                 target="_blank"
-                                style={{color:'#2080F7'}}
                                 rel="noreferrer noopener"
                               >
                                 {iuxLink}
@@ -14308,7 +14333,7 @@ function HtmlViewer({
                   //void deployToSelectedProvider();
                 }}
               >
-                {deploying?`正在发布`:`${iuxLink?'重新':''}发布`}
+                {deploying?`正在分享`:`${iuxLink?'重新':''}分享`}
               </button>
             </div>
           </div>
