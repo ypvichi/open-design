@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 
 import { ToolPackCache } from "../cache.js";
 import type { ToolPackConfig } from "../config.js";
+import { copyArtifactToOutput, outputArtifactName } from "../output.js";
 import {
   collectWorkspaceTarballs,
   createWinPackagedAppCacheKey,
@@ -137,13 +138,30 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
     });
   }
   const sizeReport = await runPhase("size-report", async () => collectWinSizeReport(config, paths, builtApp));
+  const installerPath = hasNsisTarget && await pathExists(paths.setupPath) ? paths.setupPath : null;
+  const portableZipPath = hasZipTarget && await pathExists(paths.setupZipPath) ? paths.setupZipPath : null;
+  const version = await readPackagedVersion(config);
+  if (installerPath != null) {
+    await copyArtifactToOutput(
+      config.workspaceRoot,
+      installerPath,
+      outputArtifactName(version, "win", "x64", "-setup.exe"),
+    );
+  }
+  if (portableZipPath != null) {
+    await copyArtifactToOutput(
+      config.workspaceRoot,
+      portableZipPath,
+      outputArtifactName(version, "win", "x64", "-portable.zip"),
+    );
+  }
   return {
     blockmapPath: (await pathExists(paths.blockmapPath)) ? paths.blockmapPath : null,
-    installerPath: hasNsisTarget && await pathExists(paths.setupPath) ? paths.setupPath : null,
+    installerPath,
     latestYmlPath: hasNsisTarget && await pathExists(paths.latestYmlPath) ? paths.latestYmlPath : null,
     outputRoot: config.roots.output.namespaceRoot,
     payloadPath: (await pathExists(paths.launcherPayloadPath)) ? paths.launcherPayloadPath : null,
-    portableZipPath: hasZipTarget && await pathExists(paths.setupZipPath) ? paths.setupZipPath : null,
+    portableZipPath,
     resourceRoot: builtApp == null ? paths.resourceRoot : join(builtApp.unpackedRoot, "resources", "open-design"),
     runtimeNamespaceRoot: config.roots.runtime.namespaceRoot,
     cacheReport: cache.report(),

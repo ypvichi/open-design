@@ -28,6 +28,7 @@ import {
 
 import type { ToolPackConfig } from "./config.js";
 import { domToPptxBundleResource } from "./dom-to-pptx-resource.js";
+import { copyArtifactToOutput, outputArtifactName } from "./output.js";
 import { copyBundledResourceTrees, linuxResources } from "./resources.js";
 import { copyOptionalVelaCliBinary } from "./vela-cli.js";
 import { electronBuilderVersionForAppVersion, readRuntimeAppVersion } from "./versions.js";
@@ -718,6 +719,14 @@ export async function packLinux(config: ToolPackConfig): Promise<LinuxPackResult
     await runBuildInContainer(config);
     const paths = resolveLinuxPaths(config);
     const appImagePath = config.to === "dir" ? null : await findBuiltAppImage(paths);
+    const version = await readPackagedVersion(config);
+    if (appImagePath != null) {
+      await copyArtifactToOutput(
+        config.workspaceRoot,
+        appImagePath,
+        outputArtifactName(version, "linux", process.arch === "arm64" ? "arm64" : "x64", ".AppImage"),
+      );
+    }
     return {
       appImagePath,
       outputRoot: paths.appBuilderOutputRoot,
@@ -741,6 +750,14 @@ export async function packLinux(config: ToolPackConfig): Promise<LinuxPackResult
   await runElectronBuilderLinux(config, paths);
 
   const appImagePath = config.to === "dir" ? null : await findBuiltAppImage(paths);
+  const version = await readPackagedVersion(config);
+  if (appImagePath != null) {
+    await copyArtifactToOutput(
+      config.workspaceRoot,
+      appImagePath,
+      outputArtifactName(version, "linux", process.arch === "arm64" ? "arm64" : "x64", ".AppImage"),
+    );
+  }
   return {
     appImagePath,
     outputRoot: paths.appBuilderOutputRoot,
