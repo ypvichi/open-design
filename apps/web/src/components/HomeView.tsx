@@ -401,7 +401,7 @@ export function HomeView({
   if (restoredDraftRef.current === null) {
     restoredDraftRef.current = {
       prompt: readHomeComposerDraft(HOME_COMPOSER_PROMPT_KEY) ?? '',
-      designSystemId: readHomeComposerDraft(HOME_COMPOSER_DESIGN_SYSTEM_KEY),
+      designSystemId: readHomeComposerDraft(HOME_COMPOSER_DESIGN_SYSTEM_KEY) || 'hui',
     };
   }
   const restoredDraft = restoredDraftRef.current;

@@ -13156,9 +13156,9 @@ function HtmlViewer({
                   </button>
                   {deployMenuOpen ? (
                     <div className="share-menu-popover" role="menu">
-                      <div className="share-menu-section-label" role="presentation">
+                      {/* <div className="share-menu-section-label" role="presentation">
                         {t('fileViewer.shareMenuShareLink')}
-                      </div>
+                      </div> */}
                       <button
                             type="button"
                             className="share-menu-item"
@@ -13356,8 +13356,11 @@ function HtmlViewer({
                     }}
                   >
                     <span className="share-menu-icon"><RemixIcon name="file-code-line" size={15} /></span>
-                    <span>导入到 Pixso</span>
+                    <span>推送到 Pixso</span>
                   </button>
+                  <span className="share-menu-text" style={{padding:"8px 10px 8px 36px"}}>
+                        <small>请确保Pixso中已打开AI Builder Dev插件</small>
+                    </span>
                   {/* <button
                     type="button"
                     className="share-menu-item"
@@ -14261,7 +14264,8 @@ function HtmlViewer({
                 {/* <div className="kicker">{deployModalKicker}</div> */}
                 <h2>分享到项目广场</h2>
                 <p className="subtitle">
-                  把项目文件发布到项目广场，方便其他同事预览复用
+                  把项目文件发布到项目广场，方便其他同事预览复用。<br/>
+                  [ 注意 ]: 编辑项目文件后，需重新分享。
                 </p>
               </div>
               <div className="deploy-form">

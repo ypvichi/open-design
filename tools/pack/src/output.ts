@@ -34,7 +34,8 @@ export async function copyArtifactToOutput(
   targetName: string,
   version: string,
 ): Promise<string> {
-  const outputDir = join(workspaceRoot, "releases", "download", `open-design-v${version}`);
+  // const outputDir = join(workspaceRoot, "releases", "download", `open-design-v${version}`);
+  const outputDir = join(workspaceRoot, ".output");
   await mkdir(outputDir, { recursive: true });
   const destPath = join(outputDir, targetName);
   await cp(source, destPath);
