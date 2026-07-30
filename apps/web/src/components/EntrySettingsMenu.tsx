@@ -321,7 +321,7 @@ export function EntrySettingsMenu({
             </div>
           </section>
 
-          <section className="entry-settings-menu__section">
+          {/* <section className="entry-settings-menu__section">
             <div className="entry-settings-menu__section-title">
               <Icon name="external-link" size={13} />
               <span>{t('socialShare.openDesignSection')}</span>
@@ -413,8 +413,8 @@ export function EntrySettingsMenu({
             </span>
             <span>{t('entry.followXLabel')}</span>
             <Icon name="external-link" size={12} className="entry-settings-menu__item-end" />
-          </a>
-          <a
+          </a> */}
+          {/* <a
             className="entry-settings-menu__item"
             href={THREADS_URL}
             target="_blank"
@@ -533,7 +533,7 @@ export function EntrySettingsMenu({
             </span>
             <span>{t('entry.followXiaohongshuLabel')}</span>
             <Icon name="external-link" size={12} className="entry-settings-menu__item-end" />
-          </a>
+          </a> */}
 
           <div className="entry-settings-menu__divider" aria-hidden />
 

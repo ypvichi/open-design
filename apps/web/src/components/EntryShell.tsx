@@ -1006,7 +1006,7 @@ export function EntryShell({
               <Icon name="panel-left" size={20} />
             </button>
             <div className="entry-main__topbar-chips entry-main__topbar-chips--icon-only">
-              <GithubStarBadge />
+              {/* <GithubStarBadge />
               <a
                 className="entry-workspace-chip od-tooltip"
                 href={enterpriseUrl(uiLocale)}
@@ -1053,8 +1053,9 @@ export function EntryShell({
                     </span>
                   </>
                 ) : null}
-              </a>
-              {view === 'home' ? null : executionSwitcher}
+              </a> */}
+              {/* {view === 'home' ? null : executionSwitcher} */}
+              {executionSwitcher}
               <button
                 type="button"
                 className="use-everywhere-chip od-tooltip"

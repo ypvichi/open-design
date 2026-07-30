@@ -22,11 +22,14 @@ import {
 import { Icon } from './Icon';
 import { useT } from '../i18n';
 
-const REPO = 'https://github.com/nexu-io/open-design';
+//const REPO = 'https://github.com/nexu-io/open-design';
+const REPO = 'https://github.com/ypvichi/open-design';
 const ISSUES_URL = `${REPO}/issues/new`;
 const PRS_URL = `${REPO}/pulls`;
-const RELEASES_URL = `${REPO}/releases`;
-const LATEST_RELEASE_URL = `${REPO}/releases/latest`;
+//const RELEASES_URL = `${REPO}/releases`;
+const RELEASES_URL = `https://ypvichi.github.io/open-design/index.html`
+//const LATEST_RELEASE_URL = `${REPO}/releases/latest`;
+const LATEST_RELEASE_URL = `https://ypvichi.github.io/open-design/index.html`;
 const X_URL = 'https://x.com/OpenDesignHQ';
 const DISCORD_URL = 'https://discord.gg/mHAjSMV6gz';
 
@@ -126,7 +129,7 @@ export function EntryHelpMenu() {
             </span>
             <span>{t('entry.helpGetHelp')}</span>
           </a>
-          <a
+          {/* <a
             className="entry-help-popover__item"
             href={PRS_URL}
             {...ext}
@@ -145,7 +148,7 @@ export function EntryHelpMenu() {
               <Icon name="sparkles" size={14} />
             </span>
             <span>{t('entry.helpSubmitFeature')}</span>
-          </a>
+          </a> */}
           <a
             className="entry-help-popover__item"
             href={LATEST_RELEASE_URL}
@@ -187,7 +190,7 @@ export function EntryHelpMenu() {
             </span>
             <span>{t('entry.helpDownloadDesktop')}</span>
           </a>
-          <div className="entry-help-popover__divider" aria-hidden />
+          {/* <div className="entry-help-popover__divider" aria-hidden />
           <a
             className="entry-help-popover__item"
             href={X_URL}
@@ -211,7 +214,7 @@ export function EntryHelpMenu() {
               <Icon name="discord" size={14} />
             </span>
             <span>{t('entry.discordLabel')}</span>
-          </a>
+          </a> */}
         </motion.div>
       ) : null}
       </AnimatePresence>
