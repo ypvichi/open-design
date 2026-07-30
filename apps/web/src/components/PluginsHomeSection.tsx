@@ -381,22 +381,21 @@ function CategoryRow({
           <button
             type="button"
             className={[
-              'plugins-home__chip',
-              'plugins-home__chip--saved',
+              'plugins-home__pill',
               iuxActive ? 'is-active' : '',
             ]
               .filter(Boolean)
               .join(' ')}
             onClick={onToggleIux}
             aria-pressed={savedActive}
-            data-testid="plugins-home-chip-saved"
+            data-testid="plugins-home__pill-iux"
           >
             <Icon name="star" size={11} />
             <span>
               用户体验部
               {/* {t('pluginsHome.featured')} */}
             </span>
-            <span className="plugins-home__chip-count">{iuxCount}</span>
+            <span className="plugins-home__pill-count">{iuxCount}</span>
           </button>
         ) : null}
         {!showIux && showSaved ? (

@@ -228,8 +228,8 @@
   background: var(--accent-tint);
 }
 .plugins-home__chip--saved.is-active {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
   color: white;
 }
 .plugins-home__chip--saved.is-active .plugins-home__chip-count {
@@ -343,8 +343,8 @@
   color: var(--accent);
 }
 .plugins-home__pill.is-active {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
   color: white;
 }
 .plugins-home__pill.is-active .plugins-home__pill-count {
