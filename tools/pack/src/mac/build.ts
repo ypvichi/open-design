@@ -74,6 +74,7 @@ export async function packMac(config: ToolPackConfig): Promise<MacPackResult> {
       config.workspaceRoot,
       artifacts.dmgPath,
       outputArtifactName(version, "mac", macArch, ".dmg"),
+      version,
     );
   }
   if (artifacts.zipPath != null) {
@@ -81,6 +82,7 @@ export async function packMac(config: ToolPackConfig): Promise<MacPackResult> {
       config.workspaceRoot,
       artifacts.zipPath,
       outputArtifactName(version, "mac", macArch, ".zip"),
+      version,
     );
   }
 

@@ -146,6 +146,7 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
       config.workspaceRoot,
       installerPath,
       outputArtifactName(version, "win", "x64", "-setup.exe"),
+      version,
     );
   }
   if (portableZipPath != null) {
@@ -153,6 +154,7 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
       config.workspaceRoot,
       portableZipPath,
       outputArtifactName(version, "win", "x64", "-portable.zip"),
+      version,
     );
   }
   return {

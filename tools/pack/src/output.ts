@@ -24,14 +24,17 @@ export function outputArtifactName(
 }
 
 /**
- * Copies a single build artifact to the project root `.output/` directory.
+ * Copies a single build artifact to the project root `.output/` directory,
+ * nested under `releases/download/open-design-v<version>/` to mirror the
+ * GitHub Release asset URL structure.
  */
 export async function copyArtifactToOutput(
   workspaceRoot: string,
   source: string,
   targetName: string,
+  version: string,
 ): Promise<string> {
-  const outputDir = join(workspaceRoot, ".output");
+  const outputDir = join(workspaceRoot, "releases", "download", `open-design-v${version}`);
   await mkdir(outputDir, { recursive: true });
   const destPath = join(outputDir, targetName);
   await cp(source, destPath);

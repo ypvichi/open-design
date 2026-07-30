@@ -27,8 +27,8 @@ import {
 } from "@open-design/platform";
 
 import type { ToolPackConfig } from "./config.js";
-import { domToPptxBundleResource } from "./dom-to-pptx-resource.js";
 import { copyArtifactToOutput, outputArtifactName } from "./output.js";
+import { domToPptxBundleResource } from "./dom-to-pptx-resource.js";
 import { copyBundledResourceTrees, linuxResources } from "./resources.js";
 import { copyOptionalVelaCliBinary } from "./vela-cli.js";
 import { electronBuilderVersionForAppVersion, readRuntimeAppVersion } from "./versions.js";
@@ -614,7 +614,7 @@ async function writeLinuxBuilderConfig(config: ToolPackConfig, paths: LinuxPaths
 
   const builderConfig: Record<string, unknown> = {
     appId: "io.open-design.desktop",
-    artifactName: `open-design-iux-${namespaceToken}.\${ext}`,
+    artifactName: `${PRODUCT_NAME}-${namespaceToken}.\${ext}`,
     asar: false,
     buildDependenciesFromSource: false,
     compression: "maximum",
@@ -719,14 +719,6 @@ export async function packLinux(config: ToolPackConfig): Promise<LinuxPackResult
     await runBuildInContainer(config);
     const paths = resolveLinuxPaths(config);
     const appImagePath = config.to === "dir" ? null : await findBuiltAppImage(paths);
-    const version = await readPackagedVersion(config);
-    if (appImagePath != null) {
-      await copyArtifactToOutput(
-        config.workspaceRoot,
-        appImagePath,
-        outputArtifactName(version, "linux", process.arch === "arm64" ? "arm64" : "x64", ".AppImage"),
-      );
-    }
     return {
       appImagePath,
       outputRoot: paths.appBuilderOutputRoot,
@@ -750,14 +742,20 @@ export async function packLinux(config: ToolPackConfig): Promise<LinuxPackResult
   await runElectronBuilderLinux(config, paths);
 
   const appImagePath = config.to === "dir" ? null : await findBuiltAppImage(paths);
-  const version = await readPackagedVersion(config);
+
+  // Copy the built AppImage to the unified output directory with the standard
+  // artifact naming convention (open-design-iux-{version}-linux-{arch}.AppImage).
   if (appImagePath != null) {
+    const linuxArch = process.arch === "arm64" ? "arm64" : "x64";
+    const appVersion = await readPackagedVersion(config);
     await copyArtifactToOutput(
       config.workspaceRoot,
       appImagePath,
-      outputArtifactName(version, "linux", process.arch === "arm64" ? "arm64" : "x64", ".AppImage"),
+      outputArtifactName(appVersion, "linux", linuxArch, ".AppImage"),
+      appVersion,
     );
   }
+
   return {
     appImagePath,
     outputRoot: paths.appBuilderOutputRoot,
