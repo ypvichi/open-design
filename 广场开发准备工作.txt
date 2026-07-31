@@ -177,3 +177,98 @@ pnpm od run watch f35ddab9-78ba-4289-ac20-ed447dae7461 --daemon-url http://127.0
         "topic": "natural-resources-alarm-list"
     }
 }
+
+
+制作 Apple Developer 证书（用于 macOS 代码签名）
+前置条件
+Apple Developer 账号（个人 $99/年 或 企业账号）
+macOS 系统（证书操作必须在 Mac 上完成）
+Xcode（可选，用于验证）
+第一步：在 Apple Developer Portal 创建证书
+访问 Apple Developer Certificates
+点击 "+" 创建新证书
+选择证书类型：
+Developer ID Application → 用于分发到 Mac App Store 外（推荐，对应你的 release-prerelease.yml）
+Mac Distribution → 用于 Mac App Store
+Developer ID Installer → 用于安装包签名
+按照提示生成 Certificate Signing Request (CSR)
+生成 CSR（在 Mac 上执行）
+打开 钥匙串访问 (Keychain Access) → 菜单栏 → 证书助理 → 从证书颁发机构请求证书...
+
+或使用命令行：
+
+
+# 生成私钥
+openssl genrsa -out apple-dev.key 2048
+
+# 生成 CSR
+openssl req -new -key apple-dev.key -out apple-dev.csr \
+  -subj "/emailAddress=your-email@example.com, CN=Your Name, C=US"
+上传 .csr 文件到 Apple Developer Portal
+下载生成的 .cer 证书文件
+第二步：导出为 .p12 格式
+这是 electron-builder 需要的格式。
+
+方法 A：通过钥匙串访问（推荐）
+双击下载的 .cer 文件，导入到 钥匙串访问
+在钥匙串中找到该证书（通常在 "登录" → "我的证书" 中）
+展开证书，确认包含 私钥（显示为 🔑 图标）
+右键点击证书（不是私钥）→ 导出...
+格式选择 .p12
+设置一个密码（记住这个密码，后面需要填到 APPLE_SIGNING_CERTIFICATE_PASSWORD）
+方法 B：命令行
+
+# 1. 导入 .cer 到钥匙串
+security import apple-dev.cer -k ~/Library/Keychains/login.keychain-db
+
+# 2. 将私钥和证书合并为 .p12
+# 假设私钥文件是 apple-dev.key
+openssl pkcs12 -export \
+  -in apple-dev.cer \
+  -inkey apple-dev.key \
+  -out open-design-signing.p12 \
+  -name "Open Design Developer ID" \
+  -passout pass:your-password
+第三步：Base64 编码（用于 GitHub Secrets）
+
+# 编码为 base64（去除换行符）
+base64 -i open-design-signing.p12 | tr -d '\n' > cert-base64.txt
+
+# 查看内容（确认没有换行）
+cat cert-base64.txt
+第四步：配置 GitHub Secrets
+在你的仓库中设置以下 Secrets：
+
+Secret 名称	值
+APPLE_SIGNING_CERTIFICATE_BASE64	上一步生成的 base64 字符串
+APPLE_SIGNING_CERTIFICATE_PASSWORD	导出 .p12 时设置的密码
+APPLE_ID	你的 Apple ID 邮箱
+APPLE_APP_SPECIFIC_PASSWORD	App-Specific Password
+APPLE_TEAM_ID	你的 Team ID（在 Membership 页面查看）
+第五步：验证证书
+在本地测试证书是否有效：
+
+
+# 解码测试
+echo "BASE64_STRING_HERE" | base64 --decode > test.p12
+
+# 验证 P12 格式
+openssl pkcs12 -in test.p12 -noout -info -passin pass:your-password
+
+# 查看证书详情
+openssl pkcs12 -in test.p12 -nokeys -passin pass:your-password | openssl x509 -noout -text
+常见问题
+问题	解决方案
+SecKeyItemImport 错误	密码错误或证书格式不对，重新导出
+证书不包含私钥	导出时必须选择证书+私钥，不能只导出证书
+Developer ID 证书找不到	需要是 Apple Developer Program 成员，个人免费账号没有
+Notarization 失败	检查 APPLE_ID 和 APPLE_APP_SPECIFIC_PASSWORD
+与你的 release-prerelease.yml 的对应关系
+你的流程中：
+
+APPLE_SIGNING_CERTIFICATE_BASE64 → 解码为 .p12 文件
+APPLE_SIGNING_CERTIFICATE_PASSWORD → 作为 CSC_KEY_PASSWORD
+APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID → Notarization 使用
+如果你只需要 签名（--signed）而不需要 Notarization（--notarize），则只需要前两个 secret。
+
+需要我帮你检查现有的 secrets 配置是否正确，或者协助排查具体的错误吗？
