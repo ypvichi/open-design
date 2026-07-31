@@ -261,9 +261,9 @@ function main() {
   --dynamic    使用动态计算模式（可选，默认使用固定偏移量模式）
 
 示例:
-  node generate-palette.js #E72528
-  node generate-palette.js E72528 ./my-palette.json
-  node generate-palette.js #E72528 ./my-palette.json --dynamic
+  node generate-palette.js E72528
+  node generate-palette.js E72528 ./palette.css
+  node generate-palette.js E72528 ./palette.css --dynamic
 `);
     process.exit(0);
   }
@@ -277,8 +277,7 @@ function main() {
     const generator = useDynamic ? generatePaletteDynamic : generatePalette;
     const palette = generator(brandColor);
 
-    // 按品牌色阶排序输出
-    const sortedPalette = {};
+    // 按品牌色阶排序
     const keyOrder = [
       '--h-color-primary',
       '--h-color-brand-10',
@@ -293,20 +292,19 @@ function main() {
       '--h-color-brand-100',
     ];
 
-    for (const key of keyOrder) {
-      if (palette[key]) {
-        sortedPalette[key] = palette[key];
-      }
-    }
-
-    const jsonOutput = JSON.stringify(sortedPalette, null, 2);
+    // 输出 CSS :root 格式
+    const cssVars = keyOrder
+      .filter((key) => palette[key])
+      .map((key) => `  ${key}: ${palette[key]};`)
+      .join('\n');
+    const output = `:root {\n${cssVars}\n}`;
 
     if (outputPath) {
       const fs = require('fs');
-      fs.writeFileSync(outputPath, jsonOutput + '\n', 'utf-8');
+      fs.writeFileSync(outputPath, output + '\n', 'utf-8');
       console.log(`✅ 色板已生成: ${outputPath}`);
     } else {
-      console.log(jsonOutput);
+      console.log(output);
     }
   } catch (error) {
     console.error(`❌ 错误: ${error.message}`);
