@@ -535,13 +535,21 @@ export function HomeView({
     const load = (force = false) => {
       void (force ? listPlugins() : listPluginsFresh()).then(async (rows) => {
         if (cancelled) return;
-        const resp = await fetch(`${AI_BUILDER_WEB_PREX}/webapi/v1/od/templates`);
+        // 先展示插件列表，模板是附加数据，不能阻塞主流程
         setPlugins(rows);
-        if (resp.ok){
-          const json = await resp.json();
-          const templates = json.templates ?? [];
-          setIuxTemplates(templates)
-          console.log('我的templates',templates);
+        // 模板列表拉取失败只告警，不影响后续流程（插件列表、loading 状态）
+        try {
+          const resp = await fetch(`${AI_BUILDER_WEB_PREX}/webapi/v1/od/templates`);
+          if (resp.ok) {
+            const json = await resp.json();
+            const templates = json.templates ?? [];
+            setIuxTemplates(templates);
+            console.log('我的templates', templates);
+          } else {
+            console.warn('Failed to load iux templates, status:', resp.status);
+          }
+        } catch (err) {
+          console.warn('Failed to load iux templates', err);
         }
         setPluginsLoading(false);
       });
