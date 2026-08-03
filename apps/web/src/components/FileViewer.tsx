@@ -10730,42 +10730,53 @@ function HtmlViewer({
   }
   async function deployToIux(type?:any){
     setDeploying(true);
-    let fileData = file as any;
-    const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
-    const fileName = fileData.name;
-    const files = await fetchProjectFiles(projectId);
-    let name = fileName;
-    const htmlFiles = files
-      .filter((entry) => /\.html?$/i.test(entry.name))
-      .filter(f=>f.name===fileName)
-      .map(f=>{
-      let isHome=f.name===fileName;
-      let obj:any = {};
-      if(isHome){
-        obj.home=true;
+    // 任何一步（取文件列表、读内容、POST 分享）抛异常都统一提示失败，
+    // 并且无论如何都恢复 deploying 状态，避免卡在加载中。
+    const showFailure = () => setExportToast({
+      message: '分享失败!',
+      tone: 'error',
+    });
+    try {
+      let fileData = file as any;
+      const projectId = fileData.localPath.match(/projects[\\/]([a-f0-9-]{36})[\\/]/i)?.[1];
+      if (!projectId) {
+        showFailure();
+        return;
       }
-      obj.name=f.name;
-      return new Promise(async (resolve)=>{
-            let content = await fetchProjectFileText(projectId,f.name)
-            obj.content = content;
-            if(isHome){
-              obj.home=true;
-              const titleMatch:any = content?.match(/<title>([\s\S]*?)<\/title>/i);
-              name = titleMatch ? titleMatch[1].trim() : f.name;
-              // if(urlPreviewIframeRef.current){
-              //    const pngImage = await snapdom.toPng(urlPreviewIframeRef.current?.contentWindow?.document?.body as Element);
-              //    const base64Url = pngImage.getAttribute('src');
-              //    console.log(base64Url)
-              // }
-            }
-            resolve(obj);
-      });
-    })
-    Promise.all(htmlFiles).then(async files=>{
+      const fileName = fileData.name;
+      const files = await fetchProjectFiles(projectId);
+      let name = fileName;
+      const htmlFiles = files
+        .filter((entry) => /\.html?$/i.test(entry.name))
+        .filter(f=>f.name===fileName)
+        .map(f=>{
+        let isHome=f.name===fileName;
+        let obj:any = {};
+        if(isHome){
+          obj.home=true;
+        }
+        obj.name=f.name;
+        return new Promise(async (resolve)=>{
+              let content = await fetchProjectFileText(projectId,f.name)
+              obj.content = content;
+              if(isHome){
+                obj.home=true;
+                const titleMatch:any = content?.match(/<title>([\s\S]*?)<\/title>/i);
+                name = titleMatch ? titleMatch[1].trim() : f.name;
+                // if(urlPreviewIframeRef.current){
+                //    const pngImage = await snapdom.toPng(urlPreviewIframeRef.current?.contentWindow?.document?.body as Element);
+                //    const base64Url = pngImage.getAttribute('src');
+                //    console.log(base64Url)
+                // }
+              }
+              resolve(obj);
+        });
+      })
+      const preparedFiles = await Promise.all(htmlFiles);
       const params:any = {
         sourceProjectId:projectId,
         name,
-        files
+        files: preparedFiles
       }
       console.log('params',params,fileData);
       const resp = await fetch(`${AI_BUILDER_WEB_PREX}/webapi/v1/od/template`,{
@@ -10789,13 +10800,14 @@ function HtmlViewer({
         //   setIuxLink('');
         // }
       }else{
-        setExportToast({
-          message:cancelLabel+'分享失败!',
-          tone: 'error',
-        });
+        showFailure();
       }
+    } catch (err) {
+      console.warn('[deployToIux] share failed:', err);
+      showFailure();
+    } finally {
       setDeploying(false);
-    })
+    }
   }
   async function deployToSelectedProvider() {
     setDeploying(true);
