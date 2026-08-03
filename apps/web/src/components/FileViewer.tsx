@@ -14965,6 +14965,20 @@ function escapeHtmlAttr(value: string): string {
     .replace(/>/g, '&gt;');
 }
 
+/** Fetch the image at `imageUrl` and read it back as a base64 data URL, the
+ *  payload the Pixso AI Builder Dev plugin accepts for image import. */
+async function fetchImageAsDataUrl(imageUrl: string): Promise<string> {
+  const response = await fetch(imageUrl, { cache: 'no-store' });
+  if (!response.ok) throw new Error(String(response.status));
+  const blob = await response.blob();
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read image'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 function ImageViewer({
   projectId,
   file,
@@ -14974,6 +14988,88 @@ function ImageViewer({
 }) {
   const t = useT();
   const url = `${projectFileUrl(projectId, file.name)}?v=${Math.round(file.mtime)}`;
+  const [shareMenuOpen, setShareMenuOpen] = useState(false);
+  const [pushMenuOpen, setPushMenuOpen] = useState(false);
+  const [exportToast, setExportToast] = useState<ExportToastState | null>(null);
+  const pushMenuRef = useRef<HTMLDivElement | null>(null);
+  const shareMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Close the share/push popovers on outside click / Escape.
+  useEffect(() => {
+    if (!shareMenuOpen && !pushMenuOpen) return;
+    const onPointer = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (shareMenuRef.current && shareMenuRef.current.contains(target)) return;
+      if (pushMenuRef.current && pushMenuRef.current.contains(target)) return;
+      setShareMenuOpen(false);
+      setPushMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShareMenuOpen(false);
+        setPushMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [shareMenuOpen, pushMenuOpen]);
+
+  // 复制文本到剪贴板（与 HtmlViewer 的 handleCopy 同一实现）。
+  function handleCopyText(value: string) {
+    const input = document.createElement('input');
+    input.value = value;
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand('copy');
+    document.body.removeChild(input);
+  }
+
+  // 复制本地分享链接（与 HtmlViewer 的 copyLocalShareLink 一致）：分享的是
+  // 项目 raw 文件的 HTTP 直链。
+  function copyLocalShareLink() {
+    setShareMenuOpen(false);
+    const shareUrl = `${process.env.NEXT_PUBLIC_HTTP_SERVER_URL}api/projects/${projectId}/raw/${file.name}`;
+    handleCopyText(shareUrl);
+    setExportToast({ message: '复制链接成功', tone: 'success' });
+  }
+
+  // 推送到 Pixso：把当前图片以 base64 data URL 通过本地 WebSocket 推给 Pixso
+  // 的 AI Builder Dev 插件。与 HtmlViewer 的 triggerPixsoExport 走同一协议。
+  async function triggerPixsoPush() {
+    setPushMenuOpen(false);
+    setExportToast({ message: '正在推送到 Pixso...', tone: 'loading' });
+    let dataUrl: string;
+    try {
+      dataUrl = await fetchImageAsDataUrl(url);
+    } catch {
+      setExportToast({ message: '图片读取失败，无法导入 Pixso', tone: 'error' });
+      return;
+    }
+    let ws: WebSocket | null = null;
+    try {
+      ws = new WebSocket('ws://localhost:9528');
+      ws.onopen = () => {
+        ws?.send(dataUrl);
+        ws?.close();
+        setExportToast({ message: '已推送到 Pixso', tone: 'success' });
+      };
+      ws.onerror = () => {
+        setExportToast({ message: 'Pixso 推送服务连接失败', tone: 'error' });
+        ws?.close();
+      };
+      ws.onclose = () => {
+        ws = null;
+      };
+    } catch {
+      setExportToast({ message: 'Pixso 推送服务连接失败', tone: 'error' });
+      ws = null;
+    }
+  }
+
   return (
     <div className="viewer image-viewer">
       <div className="viewer-toolbar">
@@ -14985,6 +15081,67 @@ function ImageViewer({
           </span>
         </div>
         <div className="viewer-toolbar-actions">
+          <div className="share-menu" ref={shareMenuRef}>
+            <button
+              type="button"
+              className="ghost-link"
+              aria-haspopup="menu"
+              aria-expanded={shareMenuOpen}
+              onClick={() => {
+                setPushMenuOpen(false);
+                setShareMenuOpen((v) => !v);
+              }}
+            >
+              <span>分享</span>
+            </button>
+            {shareMenuOpen ? (
+              <div className="share-menu-popover" role="menu">
+                <button
+                  type="button"
+                  className="share-menu-item"
+                  role="menuitem"
+                  onClick={() => void copyLocalShareLink()}
+                >
+                  <span className="share-menu-icon"><RemixIcon name="file-copy-line" size={15} /></span>
+                  <span className="share-menu-text">
+                    <span>复制分享链接</span>
+                    <small></small>
+                  </span>
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <div className="share-menu" ref={pushMenuRef}>
+            <button
+              type="button"
+              className="ghost-link"
+              aria-haspopup="menu"
+              aria-expanded={pushMenuOpen}
+              onClick={() => {
+                setShareMenuOpen(false);
+                setPushMenuOpen((v) => !v);
+              }}
+            >
+              <span>推送</span>
+            </button>
+            {pushMenuOpen ? (
+              <div className="share-menu-popover" role="menu">
+                <button
+                  type="button"
+                  className="share-menu-item"
+                  role="menuitem"
+                  onClick={() => void triggerPixsoPush()}
+                >
+                  <span className="share-menu-icon"><RemixIcon name="image-line" size={15} /></span>
+                  <span className="share-menu-text">
+                    <span>推送到 Pixso</span>
+                    <small>请确保Pixso中已打开AI Builder Dev插件</small>
+                  </span>
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <span className="viewer-divider" aria-hidden />
           <a
             className="ghost-link"
             href={projectFileUrl(projectId, file.name)}
@@ -15005,6 +15162,17 @@ function ImageViewer({
       <div className="viewer-body image-body">
         <img alt={file.name} src={url} />
       </div>
+      {exportToast && typeof document !== 'undefined' ? createPortal(
+        <Toast
+          message={exportToast.message}
+          tone={exportToast.tone}
+          placement="top"
+          role={exportToast.tone === 'error' ? 'alert' : 'status'}
+          ttlMs={exportToast.tone === 'loading' ? 60000 : 2200}
+          onDismiss={exportToast.tone === 'loading' ? undefined : () => setExportToast(null)}
+        />,
+        document.body,
+      ) : null}
     </div>
   );
 }
