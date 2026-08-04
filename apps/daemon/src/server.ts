@@ -605,6 +605,7 @@ import { registerActiveContextRoutes } from './routes/active-context.js';
 import { registerAutomationRoutes } from './routes/automation.js';
 import { registerAttributionRoutes } from './routes/attribution.js';
 import { registerDaemonRoutes } from './routes/daemon.js';
+import { registerAuthRoutes } from './routes/auth.js';
 import { registerGenuiRoutes } from './routes/genui.js';
 import { registerDesignSystemRoutes } from './routes/design-systems.js';
 import { registerHostToolsRoutes } from './routes/host-tools.js';
@@ -2736,6 +2737,11 @@ export async function startServer({
     getDaemonShuttingDown: () => daemonShuttingDown,
     sandboxRuntime: SANDBOX_RUNTIME,
     env: process.env,
+  });
+
+  registerAuthRoutes(app, {
+    env: process.env,
+    sendApiError,
   });
 
   const openDesignPublicMetadata = createOpenDesignPublicMetadataService();

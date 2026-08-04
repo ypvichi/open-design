@@ -28,6 +28,7 @@ import { formatDiscordPresenceCount, useDiscordPresence } from './useDiscordPres
 import { Icon } from './Icon';
 import { SocialShareGrid } from './SocialShareGrid';
 import { enterpriseUrl } from './enterpriseUrl';
+import { logout as authLogout } from '../auth/auth';
 
 const DISCORD_URL = 'https://discord.gg/mHAjSMV6gz';
 const X_URL = 'https://x.com/OpenDesignHQ';
@@ -320,6 +321,24 @@ export function EntrySettingsMenu({
               })}
             </div>
           </section>
+
+          <div className="entry-settings-menu__divider" aria-hidden />
+
+          <button
+            type="button"
+            role="menuitem"
+            className="entry-settings-menu__item"
+            onClick={() => {
+              setOpen(false);
+              authLogout();
+              window.location.reload();
+            }}
+          >
+            <span className="entry-settings-menu__item-icon" aria-hidden>
+              <Icon name="log-out" size={14} />
+            </span>
+            <span>退出登录</span>
+          </button>
 
           {/* <section className="entry-settings-menu__section">
             <div className="entry-settings-menu__section-title">
