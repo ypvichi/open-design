@@ -224,6 +224,8 @@ import { isRenderableSketchJson, SketchPreview } from './SketchPreview';
 
 import { AI_BUILDER_WEB_PREX } from './workspace-context';
 
+import {partialHtmlToIframeWeb} from '../utils/formatDsl'
+
 function resolveChromeActionsHost(): HTMLElement | null {
   return document.querySelector<HTMLElement>(APP_CHROME_FILE_ACTIONS_SELECTOR)
     ?? document.getElementById(APP_CHROME_FILE_ACTIONS_ID);
@@ -11528,8 +11530,11 @@ function HtmlViewer({
              .replace('<head>', `<head><script>window.__mcp__use__sub__pages=true</script>`)
              .replace('<HEAD>', `<HEAD><script>window.__mcp__use__sub__pages=true</script>`)
         }
-        ws?.send(html);
-        ws?.close();
+        partialHtmlToIframeWeb(html,(dslData:any)=>{
+          ws?.send(JSON.stringify(dslData));
+          ws?.close();
+        })
+        
         setExportToast({ message: '已推送到 Pixso', tone: 'success' });
       };
       ws.onmessage = (event) => {
@@ -13347,6 +13352,9 @@ function HtmlViewer({
                 </div>
               ) : null}
               <div className="share-menu chrome-share-menu">
+                  <div style={{position:"absolute",left:"10000px",top:"10000px"}}>
+                    <iframe id="ai-main-iframe" width={1920} height={1080}></iframe>
+                  </div>
                   <button
                     type="button"
                     className="chrome-action chrome-action-secondary chrome-action-with-label chrome-action-text-only"
@@ -15049,11 +15057,22 @@ function ImageViewer({
       setExportToast({ message: '图片读取失败，无法导入 Pixso', tone: 'error' });
       return;
     }
+
+    // 动态读取图片宽高
+    const img = new Image();
+    img.src = dataUrl;
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('图片尺寸读取失败'));
+    });
+    const width = img.naturalWidth;
+    const height = img.naturalHeight;
+
     let ws: WebSocket | null = null;
     try {
       ws = new WebSocket('ws://localhost:9528');
       ws.onopen = () => {
-        ws?.send(dataUrl);
+        ws?.send(dataUrl + '###' + file.name + '###' + width + '###' + height);
         ws?.close();
         setExportToast({ message: '已推送到 Pixso', tone: 'success' });
       };
