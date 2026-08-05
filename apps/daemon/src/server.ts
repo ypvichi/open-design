@@ -2742,6 +2742,7 @@ export async function startServer({
   registerAuthRoutes(app, {
     env: process.env,
     sendApiError,
+    dataDir: RUNTIME_DATA_DIR,
   });
 
   const openDesignPublicMetadata = createOpenDesignPublicMetadataService();

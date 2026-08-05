@@ -19,3 +19,14 @@ export interface LoginResponse {
   ok: true;
   username: string;
 }
+
+/** Successful response from `POST /api/auth/logout`. */
+export interface LogoutResponse {
+  ok: true;
+}
+
+/** Response from `GET /api/auth/getUserName`. */
+export interface GetUserNameResponse {
+  ok: true;
+  username: string;
+}

@@ -61,6 +61,45 @@ export function isAuthenticated(): boolean {
   );
 }
 
+/** 获取当前存储在浏览器中的用户名（用于服务端验证） */
+export function getStoredUsername(): string | null {
+  const session:any =
+    (typeof sessionStorage !== 'undefined' && readSessionFrom(sessionStorage)) ||
+    (typeof localStorage !== 'undefined' && readSessionFrom(localStorage));
+  return session?.username ?? null;
+}
+
+/**
+ * 异步调用 /api/auth/getUserName 验证服务端登录状态。
+ * 如果服务端返回了用户名，说明已登录；否则未登录。
+ */
+export async function checkAuthStatus(): Promise<
+  { ok: true; username: string } | { ok: false }
+> {
+  const username = getStoredUsername();
+  if (!username) {
+    return { ok: false };
+  }
+
+  try {
+    const response = await fetch(
+      `/api/auth/valid?username=${encodeURIComponent(username)}`,
+    );
+    if (!response.ok) {
+      return { ok: false };
+    }
+
+    const data = (await response.json()) as { ok: boolean; username: string };
+    if (data.ok && typeof data.username === 'string' && data.username.length > 0) {
+      return { ok: true, username: data.username };
+    }
+  } catch {
+    // 网络错误，视为未登录
+  }
+
+  return { ok: false };
+}
+
 /**
  * Validate credentials against the daemon (`POST /api/auth/login`) and persist
  * a session on success.

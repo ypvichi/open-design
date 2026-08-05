@@ -5,7 +5,7 @@ import { Icon } from '../components/Icon';
 import {
   DEFAULT_PASSWORD,
   DEFAULT_USERNAME,
-  isAuthenticated,
+  checkAuthStatus,
   login,
 } from './auth';
 import styles from './LoginGate.module.css';
@@ -39,7 +39,9 @@ export function LoginGate({ children }: LoginGateProps) {
   // SSR/prerender never touches browser storage or `document`.
   const [authed, setAuthed] = useState<boolean | null>(null);
   useLayoutEffect(() => {
-    setAuthed(isAuthenticated());
+    checkAuthStatus().then((result) => {
+      setAuthed(result.ok);
+    });
   }, []);
 
   if (authed === null) {
@@ -143,6 +145,7 @@ function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
                 className={styles.passwordToggle}
                 onClick={() => setShowPassword((value) => !value)}
                 aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                style={{padding:"0"}}
               >
                 <Icon name={showPassword ? 'eye-off' : 'eye'} size={16} />
               </button>
