@@ -331,7 +331,7 @@ export function EntrySettingsMenu({
             onClick={async () => {
               setOpen(false);
               await authLogout();
-              //window.location.reload();
+              window.location.reload();
             }}
           >
             <span className="entry-settings-menu__item-icon" aria-hidden>
