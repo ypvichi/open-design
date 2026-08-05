@@ -30,8 +30,8 @@ const App = dynamic(() => import('../../src/App').then((m) => m.App), {
 
 export function ClientApp() {
   return (
-    // <LoginGate>
+    <LoginGate>
       <App />
-    // </LoginGate>
+    </LoginGate>
   );
 }

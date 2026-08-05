@@ -76,14 +76,14 @@ export function getStoredUsername(): string | null {
 export async function checkAuthStatus(): Promise<
   { ok: true; username: string } | { ok: false }
 > {
-  const username = getStoredUsername();
-  if (!username) {
-    return { ok: false };
-  }
+  // const username = getStoredUsername();
+  // if (!username) {
+  //   return { ok: false };
+  // }
 
   try {
     const response = await fetch(
-      `/api/auth/valid?username=${encodeURIComponent(username)}`,
+      `/api/auth/valid`,
     );
     if (!response.ok) {
       return { ok: false };
@@ -155,14 +155,11 @@ export async function login(username: string, password: string, remember: boolea
   return { ok: true, username: sessionUsername };
 }
 
-/** Clear the session from every storage the gate could have written to. */
-export function logout(): void {
-  for (const storage of [sessionStorage, localStorage]) {
-    if (typeof storage === 'undefined') continue;
-    try {
-      storage.removeItem(AUTH_SESSION_KEY);
-    } catch {
-      // Ignore storage that is unavailable (e.g. privacy mode).
-    }
+/** Clear the session from every storage the gate could have written to, and notify the server. */
+export async function logout(): Promise<any> {
+  try {
+    return await fetch('/api/auth/logout', { method: 'POST' });
+  } catch(e) {
+    // 服务端登出失败时仍继续清除本地状态
   }
 }

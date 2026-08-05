@@ -713,7 +713,7 @@ export function WorkspaceTabsBar({ route, projects, onboardingCompleted = false 
       if (event.defaultPrevented) return;
 
       const key = event.key;
-      const lowerKey = key.toLocaleLowerCase();
+      const lowerKey = key?.toLocaleLowerCase();
       const primaryModifier = event.metaKey || event.ctrlKey;
       const primaryWithoutAlt = primaryModifier && !event.altKey;
       const ctrlWithoutPlatformModifiers = event.ctrlKey && !event.metaKey && !event.altKey;

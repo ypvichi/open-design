@@ -94,21 +94,21 @@ export function registerAuthRoutes(app: Express, deps: RegisterAuthRoutesDeps): 
   const expectedUsername = (env.OD_WEB_USERNAME ?? '').trim() || DEFAULT_WEB_USERNAME;
   const expectedPassword = env.OD_WEB_PASSWORD ?? DEFAULT_WEB_PASSWORD;
 
-  function getSsoCookie(username: string): Cookie[] {
+  function getSsoCookie(): any {
     const session = readSsoConfigFile(dataDir);
-    if (!session || session.username !== username) return [];
-    return session.cookies;
+    if (!session) return [];
+    return session;
   }
 
   function setSsoSession(username: string, cookies: Cookie[]) {
     writeSsoConfigFile(dataDir, {
-      cookies,
+      cookies:cookies.filter(n=>n.name!=='SESSION'),
       username,
       loginAt: Date.now(),
     });
   }
 
-  function clearSsoSession(_username: string) {
+  function clearSsoSession() {
     removeSsoConfigFile(dataDir);
   }
 
@@ -199,43 +199,57 @@ export function registerAuthRoutes(app: Express, deps: RegisterAuthRoutesDeps): 
   app.post('/api/auth/logout', async (req, res) => {
     try {
       // 尝试从请求体中获取用户名，清除对应的 SSO session
-      const body = (req.body ?? {}) as Partial<{ username: string }>;
-      if (body.username) {
-        clearSsoSession(body.username);
-      }
-
-      const ssoLogoutUrl = `http://sso.hikvision.com.cn/domino/dominoLogout?RedirectTo=${Buffer.from('http://hicoo.hikvision.com.cn/algomarket/algorithmRetrieval').toString('base64')}`;
+      // const body = (req.body ?? {}) as Partial<{ username: string }>;
+      // if (body.username) {
+      //   clearSsoSession(body.username);
+      // }
+      clearSsoSession();
+      const {cookies,username} = getSsoCookie();
+      const jwtToken = extractJwtToken(cookies);
+      const ssoLogoutUrl = `http://oa.hikvision.com.cn/domcfg.nsf/Logout`;
       await rawRequest('GET', ssoLogoutUrl, []);
       const response: LogoutResponse = { ok: true };
       res.json(response);
     } catch (err) {
+      res.json({ok:false,res})
       return sendApiError(res, 500, 'INTERNAL_ERROR', 'SSO logout failed');
     }
   });
 
   // GET /api/auth/valid — 验证海康 SSO 登录状态
-  // 如果存储的 cookie 中包含 jwtToken（不区分大小写），则直接认为已登录
+  // 通过访问 https://oa.hikvision.com.cn/ 判断是否跳转到登录页来验证会话是否有效
   app.get('/api/auth/valid', async (req, res) => {
     try {
-      // 从查询参数中获取用户名
-      const username = typeof req.query.username === 'string' ? req.query.username : '';
-      if (!username) {
-        const response: GetUserNameResponse = { ok: true, username: '' };
-        return res.json(response);
-      }
 
-      const cookies = getSsoCookie(username);
+      const {cookies,username} = getSsoCookie();
       const jwtToken = extractJwtToken(cookies);
 
-      // 如果存储的 cookie 中包含 jwtToken，直接认为已登录
-      if (jwtToken) {
-        const response: GetUserNameResponse = { ok: true, username };
+      // 没有 jwtToken，直接视为未登录
+      if (!jwtToken) {
+        const response: GetUserNameResponse = { ok: false, username };
         return res.json(response);
       }
 
-      // 没有 jwtToken，视为未登录
-      const response: GetUserNameResponse = { ok: true, username: '' };
-      return res.json(response);
+      // 有 jwtToken，访问 oa.hikvision.com.cn 验证会话是否仍然有效
+      try {
+        const checkResult = await rawRequest('GET', 'https://oa.hikvision.com.cn/', cookies);
+
+        // 如果最终 URL 跳转到 sso.hikvision.com.cn，说明会话已失效
+        if (checkResult.finalUrl.includes('sso.hikvision.com')) {
+          // 清除失效的会话
+          clearSsoSession();
+          const response: GetUserNameResponse = { ok: false, username };
+          return res.json(response);
+        }
+
+        // 没有跳转到登录页，会话仍然有效
+        const response: GetUserNameResponse = { ok: true, username };
+        return res.json(response);
+      } catch {
+        // 请求失败时，保守处理：视为未登录
+        const response: GetUserNameResponse = { ok: false, username };
+        return res.json(response);
+      }
     } catch (err) {
       return sendApiError(res, 500, 'INTERNAL_ERROR', 'auth valid failed');
     }

@@ -328,10 +328,10 @@ export function EntrySettingsMenu({
             type="button"
             role="menuitem"
             className="entry-settings-menu__item"
-            onClick={() => {
+            onClick={async () => {
               setOpen(false);
-              authLogout();
-              window.location.reload();
+              await authLogout();
+              //window.location.reload();
             }}
           >
             <span className="entry-settings-menu__item-icon" aria-hidden>

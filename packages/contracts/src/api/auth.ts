@@ -16,17 +16,17 @@ export interface LoginRequest {
 
 /** Successful response from `POST /api/auth/login`. */
 export interface LoginResponse {
-  ok: true;
+  ok: true | false;
   username: string;
 }
 
 /** Successful response from `POST /api/auth/logout`. */
 export interface LogoutResponse {
-  ok: true;
+  ok: true | false;
 }
 
 /** Response from `GET /api/auth/getUserName`. */
 export interface GetUserNameResponse {
-  ok: true;
+  ok: true | false;
   username: string;
 }
