@@ -46,6 +46,23 @@
     var(--bg-app);
 }
 
+.topLeftLogo {
+  position: fixed;
+  top: 24px;
+  left: 24px;
+  z-index: 10000;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.topLeftLogoText {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
 .card {
   width: 100%;
   max-width: 380px;
@@ -235,8 +252,8 @@
 }
 
 .submit:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  background: var(--accent-hover) !important;
+  border-color: var(--accent-hover) !important;
 }
 
 .submit:active {

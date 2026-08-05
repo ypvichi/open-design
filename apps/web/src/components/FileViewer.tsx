@@ -49,6 +49,7 @@ import {
   measurePreviewBlockOffsets,
 } from './markdown-scroll-sync';
 import { useT, useI18n } from '../i18n';
+import { getStoredUsername } from '../auth/auth';
 import type { Dict, Locale } from '../i18n/types';
 import {
   fetchLiveArtifact,

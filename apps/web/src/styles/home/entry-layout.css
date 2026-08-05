@@ -4806,3 +4806,21 @@
     flex: 1 1 180px;
   }
 }
+
+/* ============================================================
+   User Avatar Icon
+   Circular avatar showing the first letter of the username
+   with a dark background and white text.
+   ============================================================ */
+.user-avatar-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  flex-shrink: 0;
+  user-select: none;
+  font-weight: 600;
+  line-height: 1;
+  color: #ffffff;
+}
+

@@ -105,6 +105,9 @@ function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
 
   return (
     <div className={styles.backdrop}>
+      <div className={styles.topLeftLogo}>
+        <span className="od-brand-glyph" style={{ width: 80, height: 80, display: 'inline-block' }} />
+      </div>
       <div className={styles.card}>
         <div className={styles.brand}>
           <span className={styles.brandMark} aria-hidden>
@@ -130,7 +133,7 @@ function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
           </label>
 
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>密码</span>
+            <span className={styles.fieldLabel}>密 码</span>
             <span className={styles.inputWrap}>
               <input
                 className={styles.input}
@@ -166,10 +169,7 @@ function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
           <button type="submit" className={styles.submit} disabled={pending}>
             {pending ? '登录中…' : '登录'}
           </button>
-        </form>
-
-        <p className={styles.hint}>默认账号 admin / 密码 admin123</p>
-      </div>
+        </form></div>
     </div>
   );
 }

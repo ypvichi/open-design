@@ -76,11 +76,6 @@ export function getStoredUsername(): string | null {
 export async function checkAuthStatus(): Promise<
   { ok: true; username: string } | { ok: false }
 > {
-  // const username = getStoredUsername();
-  // if (!username) {
-  //   return { ok: false };
-  // }
-
   try {
     const response = await fetch(
       `/api/auth/valid`,
@@ -91,6 +86,8 @@ export async function checkAuthStatus(): Promise<
 
     const data = (await response.json()) as { ok: boolean; username: string };
     if (data.ok && typeof data.username === 'string' && data.username.length > 0) {
+      // 同步保存 username 到 sessionStorage，确保 FileViewer 等组件能获取
+      syncUsernameToStorage(data.username);
       return { ok: true, username: data.username };
     }
   } catch {
@@ -98,6 +95,21 @@ export async function checkAuthStatus(): Promise<
   }
 
   return { ok: false };
+}
+
+/** 将 username 同步到 sessionStorage（不覆盖已有的 localStorage 记住状态） */
+function syncUsernameToStorage(username: string): void {
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    const session: AuthSession = {
+      version: AUTH_SESSION_VERSION,
+      username,
+      loginAt: Date.now(),
+    };
+    sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // 存储失败时静默处理
+  }
 }
 
 /**
@@ -152,6 +164,7 @@ export async function login(username: string, password: string, remember: boolea
   } catch {
     return { ok: false, error: 'unavailable' };
   }
+  syncUsernameToStorage(sessionUsername);
   return { ok: true, username: sessionUsername };
 }
 

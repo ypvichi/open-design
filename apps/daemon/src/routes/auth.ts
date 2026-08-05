@@ -96,13 +96,13 @@ export function registerAuthRoutes(app: Express, deps: RegisterAuthRoutesDeps): 
 
   function getSsoCookie(): any {
     const session = readSsoConfigFile(dataDir);
-    if (!session) return [];
+    if (!session) return {};
     return session;
   }
 
   function setSsoSession(username: string, cookies: Cookie[]) {
     writeSsoConfigFile(dataDir, {
-      cookies:cookies.filter(n=>n.name!=='SESSION'),
+      cookies:cookies,//.filter(n=>n.name!=='SESSION'),
       username,
       loginAt: Date.now(),
     });
@@ -189,7 +189,7 @@ export function registerAuthRoutes(app: Express, deps: RegisterAuthRoutesDeps): 
       // 将 SSO cookie 存入内存
       setSsoSession(username, step2.cookies);
 
-      const response: any = { ok: true, username,step1,step2 };
+      const response: any = { ok: true, username };
       res.json(response);
     } catch (err) {
       return sendApiError(res, 500, 'INTERNAL_ERROR', 'SSO login failed');
@@ -206,9 +206,12 @@ export function registerAuthRoutes(app: Express, deps: RegisterAuthRoutesDeps): 
       clearSsoSession();
       const {cookies,username} = getSsoCookie();
       const jwtToken = extractJwtToken(cookies);
-      const ssoLogoutUrl = `http://oa.hikvision.com.cn/domcfg.nsf/Logout`;
-      await rawRequest('GET', ssoLogoutUrl, []);
-      const response: LogoutResponse = { ok: true };
+      const ssoLogoutUrl = `https://sso.hikvision.com/logout?service=http://hicoo.hikvision.com.cn`;
+      await rawRequest('GET', ssoLogoutUrl, cookies);
+      // await fetch(ssoLogoutUrl, {
+      //   method: "GET"
+      // });
+      const response: any = { ok: true };
       res.json(response);
     } catch (err) {
       res.json({ok:false,res})
@@ -232,7 +235,7 @@ export function registerAuthRoutes(app: Express, deps: RegisterAuthRoutesDeps): 
 
       // 有 jwtToken，访问 oa.hikvision.com.cn 验证会话是否仍然有效
       try {
-        const checkResult = await rawRequest('GET', 'https://oa.hikvision.com.cn/', cookies);
+        const checkResult = await rawRequest('GET', 'http://hicoo.hikvision.com.cn', cookies);
 
         // 如果最终 URL 跳转到 sso.hikvision.com.cn，说明会话已失效
         if (checkResult.finalUrl.includes('sso.hikvision.com')) {
@@ -243,7 +246,7 @@ export function registerAuthRoutes(app: Express, deps: RegisterAuthRoutesDeps): 
         }
 
         // 没有跳转到登录页，会话仍然有效
-        const response: GetUserNameResponse = { ok: true, username };
+        const response: any = { ok: true, username };
         return res.json(response);
       } catch {
         // 请求失败时，保守处理：视为未登录

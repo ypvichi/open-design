@@ -183,6 +183,8 @@ import {
 } from './providerModelsCache';
 import { resolveByokModelPreference } from './byok/validation';
 
+import { UserAvatarIcon } from './UserAvatarIcon';
+
 // Persist the entry nav-rail open/collapsed state so it survives both a
 // home -> project -> home navigation (EntryShell unmounts on the project
 // route) and a full reload. Without this the rail always reset to its
@@ -1055,6 +1057,7 @@ export function EntryShell({
                 ) : null}
               </a> */}
               {/* {view === 'home' ? null : executionSwitcher} */}
+              <UserAvatarIcon />
               {executionSwitcher}
               <button
                 type="button"
