@@ -1057,7 +1057,7 @@ export function EntryShell({
                 ) : null}
               </a> */}
               {/* {view === 'home' ? null : executionSwitcher} */}
-              <UserAvatarIcon />
+              {/* <UserAvatarIcon /> */}
               {executionSwitcher}
               <button
                 type="button"
