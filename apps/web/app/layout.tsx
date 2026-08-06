@@ -35,6 +35,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: intentional theme-init inline script to prevent FOUC */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script src="/fingerprint2.min.js" />
+        <script src="/qrcode.min.js" />
       </head>
       <body suppressHydrationWarning>
         <I18nProvider>

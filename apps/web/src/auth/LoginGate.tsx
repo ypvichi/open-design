@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
 import { Icon } from '../components/Icon';
@@ -38,11 +38,23 @@ export function LoginGate({ children }: LoginGateProps) {
   // effect before paint — a returning user never sees a login flash, and
   // SSR/prerender never touches browser storage or `document`.
   const [authed, setAuthed] = useState<boolean | null>(null);
+  const [fingerprint, setFingerprint] = useState<string | null>(null);
+
   useLayoutEffect(() => {
     checkAuthStatus().then((result) => {
       setAuthed(result.ok);
     });
   }, []);
+
+  // 获取浏览器指纹
+  // useEffect(() => {
+  //   let _window = window as any;
+  //   _window.Fingerprint2.get({}, (components:any) => {
+  //     const values = components.map((component:any) => component.value);
+  //     const fingerprintId = _window.Fingerprint2.x64hash128(values.join(''),31);
+  //     setFingerprint(fingerprintId);
+  //   });
+  // }, []);
 
   if (authed === null) {
     // Session state not confirmed yet: keep the app mounted underneath but
@@ -65,12 +77,12 @@ export function LoginGate({ children }: LoginGateProps) {
       >
         {children}
       </div>
-      {!authed ? <LoginScreen onAuthed={() => setAuthed(true)} /> : null}
+      {!authed ? <LoginScreen onAuthed={() => setAuthed(true)} fingerprint={fingerprint} /> : null}
     </>
   );
 }
 
-function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
+function LoginScreen({ onAuthed, fingerprint }: { onAuthed: () => void; fingerprint: string | null }) {
   // Pre-fill the built-in account so the default credentials are one click
   // away; the user can clear and type their own values if changed later.
   const [username, setUsername] = useState(DEFAULT_USERNAME);
@@ -115,6 +127,7 @@ function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
           </span>
           <h1 className={styles.title}>Open Design</h1>
           <p className={styles.subtitle}>登录以进入工作区</p>
+          {/* {fingerprint ? <p className={styles.fingerprint}>{fingerprint}</p> : null} */}
         </div>
 
         <form className={styles.form} onSubmit={handleSubmit} noValidate>
