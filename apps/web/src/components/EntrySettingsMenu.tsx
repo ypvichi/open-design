@@ -322,7 +322,7 @@ export function EntrySettingsMenu({
             </div>
           </section>
 
-          <div className="entry-settings-menu__divider" aria-hidden />
+          {/* <div className="entry-settings-menu__divider" aria-hidden />
 
           <button
             type="button"
@@ -338,7 +338,7 @@ export function EntrySettingsMenu({
               <Icon name="log-out" size={14} />
             </span>
             <span>退出登录</span>
-          </button>
+          </button> */}
 
           {/* <section className="entry-settings-menu__section">
             <div className="entry-settings-menu__section-title">
