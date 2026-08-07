@@ -518,64 +518,6 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  build_linux:
-    name: Build release linux x64
-    needs: verify
-    # if: github.repository == 'nexu-io/open-design' && vars.ENABLE_STABLE_LINUX == 'true'
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.2
-        with:
-          ref: ${{ inputs.ref }}
-          fetch-depth: 0
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-        with:
-          version: 10.33.2
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build release linux artifacts
-        run: |
-          set -euo pipefail
-          pnpm exec tools-pack linux build \
-            --dir "$RUNNER_TEMP/tools-pack" \
-            --namespace release-stable-linux \
-            --portable \
-            --app-version "${{ inputs.release_version }}" \
-            --to appimage \
-            --containerized \
-            --json
-
-      - name: Prepare release assets
-        run: |
-          set -euo pipefail
-          VERSION="${{ inputs.release_version }}"
-          ASSETS_DIR="$RUNNER_TEMP/release-assets"
-          mkdir -p "$ASSETS_DIR"
-          SDIR="$RUNNER_TEMP/tools-pack/out/linux/namespaces/release-stable-linux/builder"
-          cp "$SDIR/Open Design-release-stable-linux.AppImage" "$ASSETS_DIR/Open Design-$VERSION-linux-x64.AppImage"
-          cd "$ASSETS_DIR"
-          sha256sum "Open Design-$VERSION-linux-x64.AppImage" > "Open Design-$VERSION-linux-x64.AppImage.sha256"
-
-      - name: Upload linux release assets
-        uses: actions/upload-artifact@v7
-        with:
-          name: open-design-release-linux-assets
-          path: ${{ runner.temp }}/release-assets
-          if-no-files-found: error
-          retention-days: 1
-
   publish:
     name: Create GitHub Release
     needs:
@@ -583,15 +525,13 @@ jobs:
       - build_mac
       - build_mac_intel
       - build_win
-      - build_linux
     if: |
       always() &&
       !cancelled() &&
       needs.verify.result == 'success' &&
       needs.build_mac.result == 'success' &&
       needs.build_mac_intel.result == 'success' &&
-      needs.build_win.result == 'success' &&
-      (needs.build_linux.result == 'success' || needs.build_linux.result == 'skipped')
+      needs.build_win.result == 'success'
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -631,13 +571,6 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: open-design-release-win-assets
-          path: ${{ runner.temp }}/release-assets
-
-      - name: Download linux assets
-        if: needs.build_linux.result == 'success'
-        uses: actions/download-artifact@v8
-        with:
-          name: open-design-release-linux-assets
           path: ${{ runner.temp }}/release-assets
 
       - name: Create draft release with tag
