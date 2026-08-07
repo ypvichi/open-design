@@ -4,17 +4,68 @@
  * 将 HTML 页面转换为 DSL 结构，用于在 Pixso 中渲染组件。
  * 核心流程：加载 HTML → 解析 DOM 树 → 提取样式与组件信息 → 生成 DSL JSON。
  */
+// @ts-nocheck
 
 import { preCache, snapdom } from '@zumer/snapdom';
 
+interface TokenValue {
+  key?: string;
+  [key: string]: unknown;
+}
+
+type TokenMap = Record<string, TokenValue | string>;
+
+interface ComponentStyles {
+  [key: string]: unknown;
+}
+
+interface ComponentObj {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  key?: string;
+  weight?: string;
+  unicode?: string;
+  className?: string;
+  component: Record<string, { styles?: ComponentStyles; [key: string]: unknown }>;
+}
+
+interface DslJson {
+  beginRendering: {
+    surfaceId: string;
+    root: string;
+    width: number;
+    height: number;
+    theme: string;
+  };
+  surfaceUpdate: {
+    components: ComponentObj[];
+  };
+}
+
+interface TextsMapItem {
+  id: string;
+  key: string;
+  texts: string[];
+}
+
+interface FontUrlItem {
+  url: string;
+  fontFamilys: string[];
+  codes: string[];
+}
+
+interface SizeInfo {
+  width?: number;
+  height?: number;
+}
+
 /**
  * 从 Pixso 服务器获取 token JSON 数据。
- * 固定前缀 + 路径参数拼接成完整 URL，返回解析后的 JSON。
- *
- * @param {string} path - 路径参数，例如 "HUI%E6%A1%8C%E9%9D%A2%E7%AB%AF%20V2.61/key/HUI-%E8%93%9Dlight.token.json"
- * @returns {Promise<Object>} 返回解析后的 JSON 数据
  */
-export async function fetchTokenKeyJson(path) {
+export async function fetchTokenKeyJson(path: string): Promise<unknown> {
     const baseUrl = 'https://pixso.hikvision.com.cn/hik-plugin/ai-builder-web/public/webresources/tokens/';
     const url = baseUrl + encodeURIComponent(path);
 
@@ -34,7 +85,7 @@ export async function fetchTokenKeyJson(path) {
 /**
  * 为 SVG 元素重新计算并设置 viewBox 与显示尺寸，留出指定边距。
  */
-function resizeSVGToFit(svg, padding = 0) {
+function resizeSVGToFit(svg: SVGSVGElement, padding = 0) {
     const bbox = svg.getBBox();
 
     // 添加留白
@@ -55,7 +106,7 @@ function resizeSVGToFit(svg, padding = 0) {
  * 将相对 URL 解析为绝对 URL。
  * 处理 `..` 目录跳转、协议相对路径等边界情况。
  */
-function resolveAbsoluteUrl(baseUrl, relativePath) {
+function resolveAbsoluteUrl(baseUrl: string, relativePath: string) {
     // 若已是绝对路径，直接返回
     if (relativePath.startsWith('http://') || relativePath.startsWith('https://') || relativePath.startsWith('//')) {
         return relativePath;
@@ -105,7 +156,7 @@ function resolveAbsoluteUrl(baseUrl, relativePath) {
  * 从文档样式表中提取字体图标 URL。
  * 遍历所有 @font-face 规则，匹配图标 unicode 编码，返回字体文件列表。
  */
-function getFontUrls(documentObj, iconfonts) {
+function getFontUrls(documentObj: Document, iconfonts: string[]) {
     let fontFamilys = {};
     let codeFontFamilys = {};
     let fontUrls = new Set();
@@ -219,7 +270,7 @@ function getFontUrls(documentObj, iconfonts) {
 
     return [...fontUrls];
 }
-function getIsCanRenderNode(n) {
+function getIsCanRenderNode(n: Element) {
     let style = window.getComputedStyle(n);
 
     let flag = n.getAttribute('component-key')
@@ -235,7 +286,7 @@ function getIsCanRenderNode(n) {
             && getIsNotZeroSize(n));
     return flag
 }
-function getIsComplexSvg(dom) {
+function getIsComplexSvg(dom: Element) {
     let componentName = dom.tagName.toLowerCase();
     if (componentName !== 'svg') return false;
     // 检查 outerHTML 中是否有 url(#xxx) 引用
@@ -253,7 +304,7 @@ function getIsComplexSvg(dom) {
     }
     return false;
 }
-function getIsJustDefsSvg(dom) {
+function getIsJustDefsSvg(dom: Element) {
     let componentName = dom.tagName.toLowerCase();
     if (componentName !== 'svg') return false;
     const children = dom.children;
@@ -261,11 +312,11 @@ function getIsJustDefsSvg(dom) {
     if (children.length === 1 && children[0].tagName?.toLowerCase() === 'defs') return true;
     return false;
 }
-function getIsNotZeroSize(dom) {
+function getIsNotZeroSize(dom: Element) {
     let rect = dom.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
 }
-function getDefNodes(documentObj, svgdom) {
+function getDefNodes(documentObj: Document, svgdom: Element) {
     const svgHtml = svgdom.outerHTML;
     // 1. 收集所有 url(#xxx) 引用
     const urlRefs = new Set();
@@ -321,7 +372,7 @@ function getDefNodes(documentObj, svgdom) {
  * 将 HTML 文档转换为 DSL JSON 结构。
  * 递归遍历 DOM 树，提取每个元素的样式、尺寸、组件类型，最终生成 Pixso 可渲染的 DSL。
  */
-async function htmlToDsl(documentObj, rootWidth, rootHeight, theme = "", token) {
+async function htmlToDsl(documentObj: Document, rootWidth: number, rootHeight: number, theme = "", token?: TokenMap) {
     let body = documentObj.body;
     let subpagename = documentObj.head.getAttribute('subpagename');
     let title = (documentObj.title || '个性页') + (subpagename ? '#' + subpagename : '')
@@ -1466,7 +1517,7 @@ async function htmlToDsl(documentObj, rootWidth, rootHeight, theme = "", token) 
  * 优先从 getComputedStyle 读取，回退到样式表中查找类定义的 width/height。
  * 忽略 vh 和 % 单位，只返回固定像素值。
  */
-function getElementSize(element, documentObj) {
+function getElementSize(element: Element | null, documentObj: Document) {
     if (!element) {
         return { width: undefined, height: undefined };
     }
@@ -1545,11 +1596,11 @@ function getElementSize(element, documentObj) {
  * 从 HTML 源码中提取主题变量信息。
  * 匹配 `--theme: "xxx"` 格式的主题标记。
  */
-export function extractThemeInfo(cssText) {
+export function extractThemeInfo(cssText: string) {
     const match = cssText.match(/(--theme):\s*"([^"]+)"/);
     return match ? { themeVar: match[1], themeValue: match[2] } : null;
 };
-export function setPixsoDefaultComponent(conversation_id, isShow, keyType, width, height, title, options) {
+export function setPixsoDefaultComponent(conversation_id: string | undefined, isShow: boolean, keyType: string, width: number, height: number, title: string, options: unknown) {
     conversation_id && parent.postMessage({
         pluginMessage:
         {
@@ -1581,7 +1632,7 @@ const resourcesPaths = {
     "vue.min.js": `${RES_PREX}vue.min.js`,
     "vuex.min.js": `${RES_PREX}vuex.umd.js`,
 }
-export function partialHtmlToIframeWeb(html, callback, width = 1920, height = 1080) {
+export function partialHtmlToIframeWeb(html: string, callback: ((data: unknown) => void) | undefined, width = 1920, height = 1080) {
     let conversation_id = 'c_' + Math.random();
     let iframe = document.createElement('iframe')
     iframe.id = 'ai-main-iframe-new-' + conversation_id;

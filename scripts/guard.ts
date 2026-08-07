@@ -63,6 +63,8 @@ const residualSkippedDirectories = new Set([
   "dist",
   "node_modules",
   "out",
+  // Git submodule — not project-owned source.
+  "ypvichi.github.io",
 ]);
 
 const residualAllowedExactPaths = new Set([
@@ -89,6 +91,9 @@ const residualAllowedExactPaths = new Set([
   "apps/packaged/esbuild.config.mjs",
   // Browser service workers must be served as JavaScript files.
   "apps/web/public/od-notifications-sw.js",
+  // Third-party browser libraries served from public/ (not project-owned source).
+  "apps/web/public/fingerprint2.min.js",
+  "apps/web/public/qrcode.min.js",
   // Vendored dom-to-pptx browser bundle used by the packaged desktop renderer
   // for editable PPTX export. It is loaded into the off-screen Chromium page as
   // an upstream browser asset, not compiled as project-owned TypeScript.
