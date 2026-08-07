@@ -25,7 +25,7 @@ concurrency:
 jobs:
   notify:
     name: Notify Feishu with landing PR summary
-    if: github.repository == 'nexu-io/open-design' && github.ref == 'refs/heads/main'
+    # if: github.repository == 'nexu-io/open-design' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   label:
-    if: github.repository == 'nexu-io/open-design'
+    # if: github.repository == 'nexu-io/open-design'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/labeler@v5

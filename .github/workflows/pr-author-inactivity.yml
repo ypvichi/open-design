@@ -55,7 +55,7 @@ concurrency:
 
 jobs:
   triage:
-    if: github.repository == 'nexu-io/open-design'
+    # if: github.repository == 'nexu-io/open-design'
     runs-on: ubuntu-latest
     steps:
       - name: Remind or close inactive PRs

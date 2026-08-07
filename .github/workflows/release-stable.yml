@@ -31,7 +31,7 @@ env:
 jobs:
   verify:
     name: Verify build (typecheck + tests)
-    if: github.repository == 'nexu-io/open-design'
+    # if: github.repository == 'nexu-io/open-design'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -67,7 +67,7 @@ jobs:
   build_mac:
     name: Build release mac arm64
     needs: verify
-    if: github.repository == 'nexu-io/open-design'
+    # if: github.repository == 'nexu-io/open-design'
     runs-on: macos-14
     env:
       GH_TOKEN: ${{ github.token }}
@@ -262,7 +262,7 @@ jobs:
   build_mac_intel:
     name: Build release mac intel x64
     needs: verify
-    if: github.repository == 'nexu-io/open-design'
+    # if: github.repository == 'nexu-io/open-design'
     runs-on: macos-15-intel
     env:
       GH_TOKEN: ${{ github.token }}
@@ -344,7 +344,7 @@ jobs:
   build_win:
     name: Build release win x64
     needs: verify
-    if: github.repository == 'nexu-io/open-design'
+    # if: github.repository == 'nexu-io/open-design'
     runs-on: windows-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -521,7 +521,7 @@ jobs:
   build_linux:
     name: Build release linux x64
     needs: verify
-    if: github.repository == 'nexu-io/open-design' && vars.ENABLE_STABLE_LINUX == 'true'
+    # if: github.repository == 'nexu-io/open-design' && vars.ENABLE_STABLE_LINUX == 'true'
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
