@@ -6,13 +6,6 @@ import { join } from "node:path";
  * `open-design-iux-{version}-{platform}-{arch}{suffix}`
  *
  * The suffix typically includes the leading separator and the file extension.
- * Examples:
- *   outputArtifactName("0.16.1", "win", "x64", "-setup.exe")
- *   → "open-design-iux-0.16.1-win-x64-setup.exe"
- *   outputArtifactName("0.16.1", "mac", "arm64", ".dmg")
- *   → "open-design-iux-0.16.1-mac-arm64.dmg"
- *   outputArtifactName("0.16.1", "linux", "x64", ".AppImage")
- *   → "open-design-iux-0.16.1-linux-x64.AppImage"
  */
 export function outputArtifactName(
   version: string,
